@@ -175,13 +175,16 @@ async function redditSnapshot(name, signal) {
     const entry = (await snapshotIndex).subs?.[name.toLowerCase()];
     if (!entry || Date.now() - entry.fetchedAt > SNAPSHOT_MAX_AGE) return null;
     const res = await fetch(`data/reddit/${name.toLowerCase()}.json`, { signal });
-    return res.ok ? { ...(await res.json()), snapshot: { fetchedAt: entry.fetchedAt } } : null;
+    return res.ok ? { ...(await res.json()), audience: true, snapshot: { fetchedAt: entry.fetchedAt } } : null;
   } catch (e) {
     if (e.name === 'AbortError') throw e;
     snapshotIndex = null;
     return null; // no data folder (local runs, forks without the pipeline): read live
   }
 }
+
+/** Posts to aim for when choosing how far back to read (the full read caps at 2,000). */
+const REDDIT_TARGET_POSTS = 1800;
 
 const reddit = {
   id: 'reddit',
@@ -200,13 +203,12 @@ const reddit = {
   normalize: (q) => q.trim().replace(/^https?:\/\/(www\.|old\.)?reddit\.com\//i, '').replace(/^\/?r\//i, '').replace(/\/.*$/, ''),
   validate: (q) => /^[A-Za-z0-9_]{2,21}$/.test(q) || 'Subreddit names are 2-21 letters, numbers or underscores.',
   title: (q) => `r/${q}`,
-  async fetch(name, { signal, onProgress, days = 28, live = false }) {
+  async fetch(name, { signal, onProgress, live = false }) {
     if (!live) {
       const snapshot = await redditSnapshot(name, signal);
       if (snapshot) return snapshot;
     }
     const end = Date.now();
-    const start = end - days * DAY;
     const metaBody = await getJSON(`${ARCTIC}/subreddits/search?${new URLSearchParams({ subreddit: name, fields: 'display_name,subscribers,public_description,created_utc' })}`, { signal });
     const meta = (metaBody.data || []).find((d) => d.display_name.toLowerCase() === name.toLowerCase());
     if (!meta) throw new SourceError(`No subreddit called r/${name} in the archive. Check the spelling.`);
@@ -214,10 +216,17 @@ const reddit = {
     const sub = meta.display_name;
     const postParams = { subreddit: sub, limit: '100', fields: 'id,created_utc,title,url,link_flair_text,author,over_18,score,num_comments' };
     const commentParams = { subreddit: sub, limit: 'auto', fields: 'created_utc' };
-    const postLanes = 4, postPagesPerLane = 5, commentLanes = 4, commentPagesPerLane = 12, samples = 84;
+    // Many short comment lanes spread the reads over the whole window, so every weekday and hour
+    // gets sampled several times instead of a few long stretches.
+    const postLanes = 4, postPagesPerLane = 5, commentLanes = 12, commentPagesPerLane = 4, samples = 84;
     // Busy subreddits publish more posts than we can afford to read over four weeks, so they
     // get a spread-out sample instead: one page every two hours, rotated across the weeks.
     const probe = await postPageSpan(postParams, signal);
+    // Quieter subreddits are read further back, up to 90 days, so each hour of the week has
+    // enough posts to compare; busy ones stay at 28 days to keep the results recent.
+    const perDay = probe.count >= 100 ? (probe.count / Math.max(probe.span, 3600_000)) * DAY : 0;
+    const days = perDay ? Math.min(90, Math.max(28, Math.round(REDDIT_TARGET_POSTS / perDay))) : 90;
+    const start = end - days * DAY;
     const sampled = probe.count >= 50 && probe.span * postLanes * postPagesPerLane < (end - start) * 0.6;
 
     let pages = 0;
@@ -259,7 +268,7 @@ const reddit = {
       activity = { timestamps: posts.map((p) => p.createdAt), intervals: postsRes.intervals, label: 'posts per hour' };
     } else {
       const commentDays = covered(commentsRes.intervals) / DAY;
-      if (commentDays < days * 0.9) notes.push(`The comment activity view covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} of the last ${days}, because r/${sub} is busy. Hours outside it are left blank there.`);
+      if (commentDays < days * 0.9) notes.push(`The comment activity view covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} of the last ${days}, because r/${sub} gets more comments than can be read in one go. Hours outside it are left blank there.`);
       activity = { timestamps: commentsRes.items.map((c) => c.created_utc * 1000), intervals: commentsRes.intervals, label: 'comments per hour' };
     }
     return {
@@ -275,6 +284,7 @@ const reddit = {
       posts,
       minAgeHours: REDDIT_SETTLED_HOURS,
       activity,
+      audience: true,
       notes,
       method: 'Each post is scored by its upvotes and comments as the archive recorded them on its second visit, about 36 hours after posting. Posts younger than two days are left out because they haven’t been re-read yet.',
       sourceCredit: { label: 'Arctic Shift archive', url: 'https://github.com/ArthurHeitmann/arctic_shift' },
@@ -449,7 +459,8 @@ const mastodon = {
       ? [`Counts come from ${instance}. Interactions that happened on other servers may not have reached it, so popular posts can read lower than they are.`]
       : [];
     return {
-      profile, posts, activity: null, notes,
+      // A hashtag's posting times are the crowd's; an account's are only its owner's habits.
+      profile, posts, activity: null, audience: kind === '#', notes,
       method: 'Each post is scored by favourites, boosts and replies as its server reports them now. Boosts of other accounts and replies are left out.',
       sourceCredit: { label: `${instance} public API`, url: 'https://docs.joinmastodon.org/api/' },
     };
@@ -523,7 +534,7 @@ const hackernews = {
         description: feeds[query] ? `Every ${feeds[query] === 'story' ? 'story' : this.title(query) + ' post'} submitted in the last ${days} days.` : '',
         stats: [{ label: 'Stories', value: formatCount(posts.length) }],
       },
-      posts, activity: null, notes: [],
+      posts, activity: null, audience: Boolean(feeds[query]), notes: [],
       method: 'Each story is scored by its points (or comments) as Hacker News reports them now.',
       sourceCredit: { label: 'HN Search by Algolia', url: 'https://hn.algolia.com/api' },
     };
@@ -593,7 +604,7 @@ const lemmy = {
           { label: 'Posts', value: formatCount(c.counts.posts) },
         ],
       },
-      posts, activity: null,
+      posts, activity: null, audience: true,
       notes: [`Counts come from ${instance}; votes cast on other servers may arrive late or not at all.`],
       method: 'Each post is scored by its score and comment count as reported by the community’s server.',
       sourceCredit: { label: `${instance} Lemmy API`, url: 'https://join-lemmy.org/docs/' },
@@ -657,6 +668,7 @@ const benchmark = {
         label: 'new posts per hour',
       },
       minAgeHours: bench.settleHours,
+      audience: true,
       notes: [
         `Built from ${sampledHours.toFixed(1)} hours of samples over the last ${Math.round(Math.min(days, bench.windowDays))} days, last updated ${new Date(bench.generatedAt).toLocaleString()}.${days < 14 ? ' The benchmark is still filling in, so hours of the week that haven’t been sampled yet are blank.' : ''}`,
         'This compares posts from everyone, so it mostly reflects when engaged audiences are online, not what would work for one account. Analyze your own account for that.',

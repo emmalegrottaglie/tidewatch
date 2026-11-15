@@ -88,7 +88,7 @@ function buildLegend(keys, lowLabel, highLabel) {
   return wrap;
 }
 
-export const legend = () => buildLegend(Array.from({ length: STEPS }, (_, i) => `s${i}`), 'Less', 'More');
+export const legend = (low = 'Less', high = 'More') => buildLegend(Array.from({ length: STEPS }, (_, i) => `s${i}`), low, high);
 export const divergingLegend = () => buildLegend(['n4', 'n3', 'n2', 'n1', 'mid', 'p1', 'p2', 'p3', 'p4'], 'Below typical', 'Above typical');
 
 /**

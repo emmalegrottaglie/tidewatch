@@ -38,7 +38,7 @@
       <table class="data">
         <thead><tr><th scope="col">Platform</th><th scope="col">Source</th><th scope="col">What a post is scored by</th></tr></thead>
         <tbody>
-          <tr><th scope="row">Reddit</th><td><a href="https://github.com/ArthurHeitmann/arctic_shift">Arctic Shift</a> archive, last 28 days</td><td>Upvotes and comments</td></tr>
+          <tr><th scope="row">Reddit</th><td><a href="https://github.com/ArthurHeitmann/arctic_shift">Arctic Shift</a> archive, last 28 to 90 days</td><td>Upvotes and comments</td></tr>
           <tr><th scope="row">Bluesky</th><td>Bluesky public API, up to 1,000 posts</td><td>Likes, reposts, replies, quotes</td></tr>
           <tr><th scope="row">Mastodon</th><td>The account's own server, up to 800 posts; or a hashtag timeline</td><td>Favourites, boosts, replies</td></tr>
           <tr><th scope="row">Lemmy</th><td>The community's server, last 90 days</td><td>Score and comments</td></tr>
@@ -48,6 +48,7 @@
         </tbody>
       </table>
       <p>Why Reddit uses an archive: since 2026, reddit.com refuses requests from signed-out browsers and sends no cross-origin headers, so no static website can read it directly. Arctic Shift records each post seconds after it appears and reads it again about 36 hours later, updating its upvotes and comment count. Tidewatch only scores posts older than two days, so every score comes from that second reading.</p>
+      <p>Tidewatch reads the last 28 days of a subreddit, or up to 90 days for quieter ones, so that every hour of the week has enough posts to compare.</p>
       <p>Very busy subreddits publish more posts than can be read in one go. For those, Tidewatch reads one page of posts every two hours across four weeks and says so on the results.</p>
       <p>Popular subreddits are also read once a day by a scheduled job and saved with the site, so they open instantly. The results say when that copy was made and offer to read the subreddit live instead.</p>
       <h3>The Bluesky benchmark</h3>
@@ -55,16 +56,25 @@
       <p>It answers a different question from analyzing one account: when posts from everyone tend to do well. Your own audience may keep different hours, so analyze your account too.</p>
       <p>Instagram, TikTok, X, Facebook, LinkedIn, Threads and YouTube don't offer public data a website can read without a server and a login, so for those you bring the export from your own analytics.</p>
 
-      <h2>How each hour is scored</h2>
+      <h2>The best-time score</h2>
+      <p>The main heatmap shows a best-time score from 0 to 100 for every hour of the week, where 100 is the best hour. It blends two signals:</p>
+      <ul>
+        <li><strong>When the audience is active</strong>: comments per hour on Reddit, or how many posts go up in a community, hashtag or on Hacker News. More people around means more people see a new post.</li>
+        <li><strong>How posts did</strong>: how well posts published at each hour ranked against the others (explained below).</li>
+      </ul>
+      <p>How posts did only gets a say when the pattern is real. Tidewatch splits the posts into two halves by calendar day, scores each half on its own and checks whether the halves agree on which hours win, using three different splits. Pure chance rarely gets past 0.35 on this check, so only agreement above 0.25 counts, and post performance never makes up more than 60% of the score. When posts didn't do consistently better at any hour, the score follows the audience, and the page says so.</p>
+      <p>For a single account (Bluesky, Mastodon or Hacker News users, and imported files) there is no audience signal: the times an account posts are its owner's habit, not when followers are around. There the score comes from how posts did alone, with the same consistency check reported.</p>
+
+      <h2>How posts did, hour by hour</h2>
       <ol>
         <li>Posts younger than 24 hours (two days on Reddit) are left out, because they are still collecting interactions. Reddit's AutoModerator threads are left out too, since they are posted on a schedule.</li>
         <li>Each post is ranked against all the others by the metric you pick. A post that beat 90% of them scores 90%; ties share the difference. Ranks are graded, so a huge post counts for more than a decent one, but no post can score above 100%, so one viral post can't decide the answer. They also work the same whether typical posts get 1 like or 10,000, which matters on Reddit, where most posts sit at 1 upvote.</li>
         <li>Ranks and post counts are added up for each of the 168 hours of the week, in the time zone you pick, then smoothed with the neighbouring hours (a quarter from each side), because a post at 4:59 and one at 5:01 are really the same choice.</li>
-        <li>Each hour's score is the average rank of its posts, pulled toward 50% as if it had three extra average posts. An hour with one lucky post doesn't beat an hour with twenty good ones.</li>
+        <li>Most communities run on a daily rhythm, and a single hour of the week often holds only a handful of posts. So each hour borrows from the same hour on the other six days, as if it had eight extra posts at that hour's weekly average (which is itself pulled toward 50%). An hour with four posts mostly follows its time of day; an hour with sixty keeps its own result. An hour with one lucky post doesn't beat an hour with twenty good ones.</li>
         <li>A score of 50% is a typical hour. 65% means posts published then beat 65% of the other posts, on average.</li>
       </ol>
-      <p>The activity view counts events per hour instead (comments for Reddit, published posts elsewhere), divided by how many times each hour of the week appears in the period read, so a window with two Tuesdays and one Wednesday doesn't make Tuesday look twice as busy.</p>
-      <p>When fewer than 15 posts can be scored, the recommendations come from activity instead, and the page says which one it used.</p>
+      <p>The activity view counts events per hour instead (comments for Reddit, published posts elsewhere), divided by how many times each hour of the week appears in the period read, so a window with two Tuesdays and one Wednesday doesn't make Tuesday look twice as busy. Each hour also borrows one hour's worth of its time of day's average, so a single busy thread can't make an hour look like the week's peak.</p>
+      <p>When fewer than 15 posts can be scored, how posts did is left out of the best-time score.</p>
 
       <h2>What it can't tell you</h2>
       <p>These are patterns in past posts, not a promise. A good hour for a community is partly a good hour because people already post then; what you post matters more than when. Small accounts produce noisy results, and the page warns when the sample is small. Counts on federated platforms (Mastodon, Lemmy) only include what the server you query has heard about.</p>

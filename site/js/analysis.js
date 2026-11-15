@@ -10,6 +10,7 @@
 export const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 export const SLOTS = 168;
 const HOUR = 3600_000;
+const DAY_MS = 24 * HOUR;
 
 const formatterCache = new Map();
 function partsFormatter(timeZone) {
@@ -113,36 +114,128 @@ export function percentileRanks(values) {
 }
 
 /**
+ * Weekly grid of average ranks, each slot pooled toward its hour of day.
+ *
+ * Most communities run on a daily rhythm, and a slot (say Wednesday 4 pm) often holds only a
+ * handful of posts, so each slot borrows strength from the same hour on the other six days:
+ * its average is shrunk toward the hour-of-day average by `pool` imaginary posts, and that
+ * hour-of-day average is itself shrunk toward 50% by `prior` imaginary posts. A slot with 4 posts
+ * mostly follows its hour of day; a slot with 60 posts keeps its own result.
+ */
+function pooledGrid(slots, ranks, { prior, pool }) {
+  const sums = new Array(SLOTS).fill(0);
+  const counts = new Array(SLOTS).fill(0);
+  slots.forEach((s, i) => { sums[s] += ranks[i]; counts[s] += 1; });
+  const hourSums = new Array(24).fill(0), hourCounts = new Array(24).fill(0);
+  for (let s = 0; s < SLOTS; s++) { hourSums[s % 24] += sums[s]; hourCounts[s % 24] += counts[s]; }
+  const hs = smoothRing(hourSums), hc = smoothRing(hourCounts);
+  const hourMean = hs.map((x, hr) => (x + prior * 0.5) / (hc[hr] + prior));
+  const sSums = smoothRing(sums), sCounts = smoothRing(counts);
+  const score = sSums.map((x, slot) => ((x + pool * hourMean[slot % 24]) / (sCounts[slot] + pool)) * 100);
+  return { score, counts: sCounts, rawCounts: counts };
+}
+
+/** Pearson correlation; 0 when either side has no variation. */
+export function correlation(xs, ys) {
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; syy += (ys[i] - my) ** 2; }
+  return sxx && syy ? sxy / Math.sqrt(sxx * syy) : 0;
+}
+
+/**
  * Score every hour of the week by how well posts published then ranked.
  *
  * 1. Each post's result is turned into its percentile rank among all posts
  *    read: 0.9 means it beat 90% of them. Ranks are graded (a huge post beats
  *    more than a decent one) but bounded, so one viral post can't decide the
  *    answer, and they work the same whether typical posts get 1 like or 10,000.
- * 2. Ranks and post counts are summed per slot, then smoothed over neighbouring
- *    hours.
- * 3. Each slot's average rank is shrunk toward 50% by `prior` imaginary average
- *    posts, so an hour with one lucky post doesn't outrank an hour with twenty
- *    good ones.
- * 4. `score` is that average as a percentage: 50 is a typical hour, 65 means
- *    posts published then beat 65% of posts on average.
+ * 2. Ranks and post counts are summed per slot, smoothed over neighbouring
+ *    hours and pooled toward the same hour on other days (see pooledGrid).
+ * 3. `score` is the resulting average as a percentage: 50 is a typical hour,
+ *    65 means posts published then beat 65% of posts on average.
+ * 4. `reliability` says whether the pattern is real: posts are split into two
+ *    halves by calendar day, each half is scored separately, and the two grids
+ *    are compared (averaged over three different splits). If good hours were
+ *    good by chance, the halves disagree. The correlation is
+ *    stepped up to the full sample (Spearman-Brown) and floored at 0, so 1
+ *    means the halves agree perfectly and 0 means no agreement at all.
  */
-export function scoreSlots(posts, { timeZone, metric = 'engagement', prior = 3 } = {}) {
+export function scoreSlots(posts, { timeZone, metric = 'engagement', prior = 3, pool = 8 } = {}) {
   const values = posts.map((p) => metricValue(p, metric));
-  const sums = new Array(SLOTS).fill(0);
-  const counts = new Array(SLOTS).fill(0);
+  const empty = new Array(SLOTS).fill(0);
   const valid = posts.length >= 2 && values.some((v) => v !== values[0]);
-  if (!valid) return { score: new Array(SLOTS).fill(null), counts, rawCounts: counts.slice(), valid: false };
+  if (!valid) return { score: new Array(SLOTS).fill(null), counts: empty, rawCounts: empty.slice(), valid: false, reliability: 0 };
   const ranks = percentileRanks(values);
-  posts.forEach((p, i) => {
-    const s = slotOf(p.createdAt, timeZone);
-    sums[s] += ranks[i];
-    counts[s] += 1;
+  const slots = posts.map((p) => slotOf(p.createdAt, timeZone));
+  const grid = pooledGrid(slots, ranks, { prior, pool });
+  // Three ways of splitting calendar days in half (by day number mod 4: {0,1}|{2,3},
+  // {0,2}|{1,3}, {0,3}|{1,2}); one split alone agrees by chance too often.
+  const group = posts.map((p) => Math.floor(p.createdAt / DAY_MS) % 4);
+  const splits = [[0, 1], [0, 2], [0, 3]].map((pair) => {
+    const halves = [[], []];
+    group.forEach((g, i) => halves[pair.includes(g) ? 0 : 1].push(i));
+    if (!halves.every((idx) => idx.length >= 10)) return null;
+    const [a, b] = halves.map((idx) => pooledGrid(idx.map((i) => slots[i]), idx.map((i) => ranks[i]), { prior, pool }).score);
+    return correlation(a, b);
+  }).filter((r) => r !== null);
+  const r = splits.length ? splits.reduce((x, y) => x + y, 0) / splits.length : 0;
+  const reliability = r > 0 ? (2 * r) / (1 + r) : 0;
+  return { ...grid, valid: true, reliability };
+}
+
+/** Average a weekly grid (nulls skipped) into 24 hours of day or 7 weekdays. */
+export function collapseGrid(values, by) {
+  const size = by === 'hour' ? 24 : 7;
+  const sums = new Array(size).fill(0), counts = new Array(size).fill(0);
+  values.forEach((v, slot) => {
+    if (v === null || !Number.isFinite(v)) return;
+    const k = by === 'hour' ? slot % 24 : Math.floor(slot / 24);
+    sums[k] += v; counts[k] += 1;
   });
-  const sSums = smoothRing(sums);
-  const sCounts = smoothRing(counts);
-  const score = sSums.map((s, i) => ((s + prior * 0.5) / (sCounts[i] + prior)) * 100);
-  return { score, counts: sCounts, rawCounts: counts, valid: true };
+  return sums.map((s, i) => (counts[i] ? s / counts[i] : null));
+}
+
+/** Rescale to 0..1 between the smallest and largest value; nulls stay null. */
+function minMax(values) {
+  const nums = values.filter((v) => v !== null && Number.isFinite(v));
+  const lo = Math.min(...nums), hi = Math.max(...nums);
+  return values.map((v) => (v === null || !Number.isFinite(v) ? null : hi > lo ? (v - lo) / (hi - lo) : 0.5));
+}
+
+/** Most weight post performance can get in the best-time score, even when it is perfectly consistent. */
+export const MAX_PERFORMANCE_WEIGHT = 0.6;
+
+/**
+ * The "best time to post" score: 0-100 for every hour of the week, 100 for the best one.
+ *
+ * It blends two signals, each rescaled to 0..1 across the week:
+ *  - audience: how busy the community is (comments or posts per hour). Only used when the
+ *    activity describes the audience, not when it is one account's own posting schedule.
+ *  - performance: how posts published then ranked (scoreSlots).
+ * Performance gets up to MAX_PERFORMANCE_WEIGHT, scaled by how far its reliability is above
+ * chance, so when posts don't do consistently better at any hour the score follows the
+ * audience, and when they clearly do it counts for more. With only one signal available, that signal is the score.
+ */
+export function bestTimes(grid, activity, { audience = false, usePerformance = true } = {}) {
+  // Hours of the week the activity reads never covered take that hour of day's average on the
+  // days that were covered, so the map has no holes where the audience follows a daily rhythm.
+  let A = null;
+  if (audience && activity) {
+    const byHour = collapseGrid(activity.rate, 'hour');
+    A = minMax(activity.rate.map((v, s) => (v !== null ? v : byHour[s % 24])));
+  }
+  const P = usePerformance && grid.valid ? minMax(grid.score) : null;
+  if (!A && !P) return null;
+  // Pure noise reaches a reliability of about 0.35 by chance, so only what is above 0.25 counts.
+  const trust = Math.min(1, Math.max(0, (grid.reliability - 0.25) / 0.75));
+  const weight = !A ? 1 : !P ? 0 : MAX_PERFORMANCE_WEIGHT * trust;
+  const raw = new Array(SLOTS).fill(null).map((_, s) => {
+    if (A && A[s] === null) return null;
+    return (A ? (1 - weight) * A[s] : 0) + (P ? weight * P[s] : 0);
+  });
+  return { score: minMax(raw).map((v) => (v === null ? null : v * 100)), weight, audience: Boolean(A), performance: Boolean(P) };
 }
 
 /** Collapse the grid to one score per hour of day or per weekday, using the same shrinkage. */
@@ -166,11 +259,16 @@ export function collapse(posts, { timeZone, metric = 'engagement', prior = 3, by
  * Activity rate (events per hour) for each weekly slot, from raw timestamps and the intervals they
  * cover. `weights[i]`, when given, is how many events timestamp i stands for (pre-binned counts).
  */
-export function activityRate(timestamps, intervals, timeZone, weights = null) {
+export function activityRate(timestamps, intervals, timeZone, weights = null, { pool = 1 } = {}) {
   const counts = new Array(SLOTS).fill(0);
   timestamps.forEach((t, i) => { counts[slotOf(t, timeZone)] += weights ? weights[i] : 1; });
   const exposure = exposureHours(intervals, timeZone);
-  const measured = counts.map((c, i) => (exposure[i] > 0 ? c / exposure[i] : null));
+  // One busy thread can flood a slot that was only read once, so each slot borrows `pool` hours
+  // of exposure at the rate its hour of day has across the whole week.
+  const hourCounts = new Array(24).fill(0), hourExposure = new Array(24).fill(0);
+  for (let s = 0; s < SLOTS; s++) { hourCounts[s % 24] += counts[s]; hourExposure[s % 24] += exposure[s]; }
+  const hourRate = hourCounts.map((c, hr) => (hourExposure[hr] > 0 ? c / hourExposure[hr] : 0));
+  const measured = counts.map((c, i) => (exposure[i] > 0 ? (c + pool * hourRate[i % 24]) / (exposure[i] + pool) : null));
   // A single empty hour between two measured hours (sampled sources read every other hour)
   // is filled with their average; longer gaps stay empty.
   const rate = measured.map((r, i) => {
@@ -270,7 +368,9 @@ export function groupBy(posts, keyFn, metric = 'engagement') {
 
 /**
  * Full analysis of a source result.
- * @param {object} data  { posts, activity?: { timestamps, intervals, weights? }, perfIntervals?, minAgeHours? }
+ * @param {object} data  { posts, activity?: { timestamps, intervals, weights? }, audience?, perfIntervals?, minAgeHours? }
+ *   audience: true when `activity` measures the community (comments, everyone's posts) rather than
+ *   one account's own posting schedule, so it can stand for when the audience is around.
  */
 export function analyze(data, { timeZone, metric = 'engagement', now = Date.now(), minAgeHours = 24 } = {}) {
   const all = (data.posts || []).filter((p) => Number.isFinite(p.createdAt));
@@ -296,11 +396,14 @@ export function analyze(data, { timeZone, metric = 'engagement', now = Date.now(
     activity.label = act.label;
     activity.total = act.weights ? act.weights.reduce((a, b) => a + b, 0) : act.timestamps.length;
   }
-  // When there aren't enough scored posts, recommendations come from activity instead.
+  // Recommendations come from the best-time score (audience + consistent performance). Below
+  // 15 scored posts performance is left out of it; with no audience signal either, they fall
+  // back to activity.
   const minPosts = 15;
   const usePerformance = grid.valid && eligible.length >= minPosts;
-  const rankingScores = usePerformance ? grid.score : activity ? activity.rate : grid.score;
-  const basis = usePerformance ? 'performance' : activity ? 'activity' : grid.valid ? 'performance' : 'none';
+  const best = bestTimes(grid, activity, { audience: Boolean(data.audience), usePerformance });
+  const rankingScores = best ? best.score : activity ? activity.rate : grid.score;
+  const basis = best ? 'best' : activity ? 'activity' : grid.valid ? 'performance' : 'none';
 
   const sorted = [...eligible].sort((a, b) => metricValue(b, metric) - metricValue(a, metric));
   const times = all.map((p) => p.createdAt);
@@ -312,6 +415,8 @@ export function analyze(data, { timeZone, metric = 'engagement', now = Date.now(
     counts: { fetched: all.length, eligible: eligible.length },
     window: times.length ? [Math.min(...times), Math.max(...times)] : null,
     grid,
+    best,
+    reliability: grid.reliability,
     byHour,
     byDay,
     activity,
@@ -337,11 +442,12 @@ export function hourLabel(hour, { hour12 = true, style = 'short' } = {}) {
 
 /** CSV export of the weekly grid. */
 export function gridToCSV(result) {
-  const rows = [['day', 'hour', 'avg_percentile_rank', 'posts_smoothed', 'activity_per_hour']];
+  const rows = [['day', 'hour', 'best_time_score', 'avg_percentile_rank', 'posts_smoothed', 'activity_per_hour']];
   for (let s = 0; s < SLOTS; s++) {
+    const b = result.best ? result.best.score[s] : null;
     const l = result.grid.score[s];
     const a = result.activity ? result.activity.rate[s] : null;
-    rows.push([DAYS[Math.floor(s / 24)], s % 24, l == null ? '' : l.toFixed(1), result.grid.counts[s].toFixed(2), a == null ? '' : a.toFixed(3)]);
+    rows.push([DAYS[Math.floor(s / 24)], s % 24, b == null ? '' : b.toFixed(1), l == null ? '' : l.toFixed(1), result.grid.counts[s].toFixed(2), a == null ? '' : a.toFixed(3)]);
   }
   return rows.map((r) => r.join(',')).join('\n');
 }

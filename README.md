@@ -17,7 +17,7 @@ can't do on its own: a platform-wide Bluesky benchmark and daily snapshots of po
 
 | Platform | Input | Data source | Score |
 | --- | --- | --- | --- |
-| Reddit | `photography` | [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift) archive, last 28 days | Upvotes and comments |
+| Reddit | `photography` | [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift) archive, last 28 days (up to 90 for quieter subreddits) | Upvotes and comments |
 | Bluesky | `name.bsky.social` or a profile link | `public.api.bsky.app` | Likes, reposts, replies, quotes |
 | Mastodon | `@user@server` or `#tag@server` | The account's own server | Favourites, boosts, replies |
 | Lemmy | `community@server` | The community's server | Score and comments |
@@ -40,13 +40,24 @@ every two hours across four weeks instead of everything, and the results page sa
 
 ## How the scoring works
 
+The main heatmap is a **best-time score** (0-100, 100 = best hour of the week) that blends when
+the audience is active with how well posts published at each hour did.
+
 1. Posts younger than 24 hours (48 on Reddit) are excluded; they are still collecting interactions.
 2. Each post gets its percentile rank among all posts read (the share of posts it beat, ties split),
    which is graded but bounded and indifferent to how skewed the platform's numbers are.
-3. Ranks and counts are summed for each of the 168 hours of the week, in the chosen time zone, and
-   smoothed with neighbouring hours.
-4. Each hour's score is the mean rank, shrunk toward 50% by three imaginary average posts. 50% is a
-   typical hour; 65% means posts published then beat 65% of the others on average.
+3. Ranks and counts are summed for each of the 168 hours of the week, in the chosen time zone,
+   smoothed with neighbouring hours, and pooled toward the same hour on the other days (eight
+   imaginary posts at the hour-of-day average, which is itself shrunk toward 50%).
+4. A consistency check splits the posts into two halves by calendar day (three different splits),
+   scores each half and correlates them. Pure noise rarely scores above 0.35.
+5. The best-time score mixes rescaled audience activity (comments or posts per hour, only where it
+   describes the community rather than one account's posting habit) with rescaled performance.
+   Performance gets up to 60% of the weight, in proportion to how far the consistency check is
+   above 0.25; otherwise the score follows the audience.
+
+"How posts did" (average rank, 50% = typical hour) and the raw activity view remain available as
+toggles.
 
 The full explanation is on the site's [How it works](site/method.html) page, and the code is in
 [`site/js/analysis.js`](site/js/analysis.js).

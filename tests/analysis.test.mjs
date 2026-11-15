@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   dayHour, slotOf, median, smoothRing, exposureHours, scoreSlots, activityRate,
   rankSlots, bestPerDay, phrases, groupBy, analyze, metricValue, hourLabel, tokenize, gridToCSV, percentileRanks,
+  bestTimes, collapseGrid, MAX_PERFORMANCE_WEIGHT,
 } from '../site/js/analysis.js';
 
 const HOUR = 3600_000;
@@ -156,7 +157,7 @@ test('hourLabel and CSV output', () => {
   const r = analyze({ posts }, { timeZone: 'UTC', metric: 'likes', now: at(0, 0, 5) });
   const csv = gridToCSV(r).split('\n');
   assert.equal(csv.length, 169);
-  assert.equal(csv[0], 'day,hour,avg_percentile_rank,posts_smoothed,activity_per_hour');
+  assert.equal(csv[0], 'day,hour,best_time_score,avg_percentile_rank,posts_smoothed,activity_per_hour');
 });
 
 test('percentileRanks splits ties and averages to one half', () => {
@@ -175,4 +176,65 @@ test('scores are graded on skewed data, unlike a capped ratio', () => {
   const g = scoreSlots(posts, { timeZone: 'UTC', metric: 'likes' });
   assert.ok(g.score[2 * 24 + 9] > g.score[5 * 24 + 15]);
   assert.ok(g.score[5 * 24 + 15] > 50);
+});
+
+test('reliability is high when the same hours win on different days and low for noise', () => {
+  let seed = 7;
+  const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const real = [], noise = [];
+  for (let week = 0; week < 4; week++) {
+    for (let day = 0; day < 7; day++) {
+      for (let hour = 0; hour < 24; hour += 2) {
+        // Evening posts really do better in `real`; `noise` has no pattern at all.
+        real.push(post(at(day, hour, week), Math.round((hour >= 18 ? 50 : 10) * (0.5 + random()))));
+        noise.push(post(at(day, hour, week), Math.round(30 * random())));
+      }
+    }
+  }
+  const r = scoreSlots(real, { timeZone: 'UTC', metric: 'likes' });
+  const n = scoreSlots(noise, { timeZone: 'UTC', metric: 'likes' });
+  assert.ok(r.reliability > 0.7, `real ${r.reliability}`);
+  assert.ok(n.reliability < 0.4, `noise ${n.reliability}`);
+});
+
+test('a thinly posted slot follows its hour of day instead of one lucky post', () => {
+  const posts = [];
+  // Every day at 20:00 does well, with three posts each.
+  for (let day = 0; day < 7; day++) for (let i = 0; i < 3; i++) posts.push(post(at(day, 20, i) + i, 40));
+  // Background posts at other hours.
+  for (let i = 0; i < 60; i++) posts.push(post(at(i % 7, (i * 5) % 24 === 20 ? 3 : (i * 5) % 24, i % 4) + i, 10));
+  // One lucky post on Tuesday 06:00.
+  posts.push(post(at(2, 6, 1), 1000));
+  const g = scoreSlots(posts, { timeZone: 'UTC', metric: 'likes' });
+  assert.ok(g.score[2 * 24 + 20] > g.score[2 * 24 + 6]);
+});
+
+test('bestTimes follows the audience when performance is noise and caps its weight', () => {
+  const activity = { rate: Array.from({ length: 168 }, (_, s) => (s % 24 === 21 ? 50 : 5)) };
+  const grid = { valid: true, reliability: 0, score: Array.from({ length: 168 }, (_, s) => (s === 30 ? 90 : 50)) };
+  const b = bestTimes(grid, activity, { audience: true });
+  assert.equal(b.weight, 0);
+  assert.equal(rankSlots(b.score, 1)[0].hour, 21);
+  const strong = bestTimes({ ...grid, reliability: 1 }, activity, { audience: true });
+  assert.equal(strong.weight, MAX_PERFORMANCE_WEIGHT);
+  // Without an audience signal (one account's own posting times) performance decides alone.
+  const solo = bestTimes(grid, activity, { audience: false });
+  assert.equal(solo.weight, 1);
+  assert.equal(rankSlots(solo.score, 1)[0].slot, 30);
+  assert.equal(Math.max(...b.score), 100);
+});
+
+test('collapseGrid averages slots into hours and days', () => {
+  const values = Array.from({ length: 168 }, (_, s) => (s % 24 === 5 ? 10 : 0));
+  values[0] = null;
+  assert.equal(collapseGrid(values, 'hour')[5], 10);
+  assert.equal(collapseGrid(values, 'day')[1], 10 / 24);
+  assert.equal(collapseGrid(values, 'day')[0], 10 / 23);
+});
+
+test('bestTimes fills hours the activity never covered from the same hour on other days', () => {
+  const rate = Array.from({ length: 168 }, (_, s) => (s % 24 === 21 ? 50 : 5));
+  rate[1 * 24 + 21] = null; // Monday 21:00 was never read
+  const b = bestTimes({ valid: false }, { rate }, { audience: true });
+  assert.equal(b.score[1 * 24 + 21], 100);
 });
