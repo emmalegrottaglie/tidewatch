@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How Tidewatch works</title>
+  <meta name="description" content="Where Tidewatch gets its data, how it scores each hour of the week, and what it can't tell you.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+  <script>try{const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch{}</script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="./">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor"/><path d="M4 20c3 0 3-3 6-3s3 3 6 3 3-3 6-3 3 3 6 3" fill="none" stroke="var(--paper)" stroke-width="2.4" stroke-linecap="round"/><circle cx="22" cy="10" r="3.2" fill="#f9ad26"/></svg>
+        Tidewatch
+      </a>
+      <nav class="site-nav" aria-label="Main">
+        <a href="./">Analyzer</a>
+        <a href="tools.html">Tools</a>
+        <a href="method.html" aria-current="page">How it works</a>
+        <a href="https://github.com/emmalegrottaglie/tidewatch">Source</a>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">Theme</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="prose">
+      <h1>How it works</h1>
+      <p>Tidewatch reads a community's or account's recent posts straight from the platform, notes the hour each one went up, and compares how posts from each hour of the week did. Everything happens in your browser: there is no Tidewatch server, no account and no tracking.</p>
+
+      <h2>Where the data comes from</h2>
+      <table class="data">
+        <thead><tr><th scope="col">Platform</th><th scope="col">Source</th><th scope="col">What a post is scored by</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Reddit</th><td><a href="https://github.com/ArthurHeitmann/arctic_shift">Arctic Shift</a> archive, last 28 days</td><td>Comments received in its first day</td></tr>
+          <tr><th scope="row">Bluesky</th><td>Bluesky public API, up to 1,000 posts</td><td>Likes, reposts, replies, quotes</td></tr>
+          <tr><th scope="row">Mastodon</th><td>The account's own server, up to 800 posts; or a hashtag timeline</td><td>Favourites, boosts, replies</td></tr>
+          <tr><th scope="row">Lemmy</th><td>The community's server, last 90 days</td><td>Score and comments</td></tr>
+          <tr><th scope="row">Hacker News</th><td>HN Search by Algolia</td><td>Points and comments</td></tr>
+          <tr><th scope="row">Anything else</th><td>An analytics export you drop in</td><td>Whichever number columns the file has</td></tr>
+        </tbody>
+      </table>
+      <p>Why Reddit uses an archive: since 2026, reddit.com refuses requests from signed-out browsers and sends no cross-origin headers, so no static website can read it directly. Arctic Shift records posts and comments seconds after they appear. Upvote counts in it are frozen at that moment, so Tidewatch doesn't use them; it counts the comments each post went on to receive instead. If you want upvotes, save a <code>top.json</code> page while signed in to Reddit and import it.</p>
+      <p>Very busy subreddits write more comments than can be read in one go. For those, Tidewatch takes a short sample every two hours across four weeks and recommends the hours when the community comments most, and says so on the results.</p>
+      <p>Instagram, TikTok, X, Facebook, LinkedIn, Threads and YouTube don't offer public data a website can read without a server and a login, so for those you bring the export from your own analytics.</p>
+
+      <h2>How each hour is scored</h2>
+      <ol>
+        <li>Posts younger than 24 hours are left out, because they are still collecting interactions. Reddit's AutoModerator threads are left out too, since they are posted on a schedule.</li>
+        <li>Each post gets a weight: its result divided by the median post's result, capped at 5. One viral post counts the same as any post five times better than usual, so it can't decide the answer alone.</li>
+        <li>Weights and post counts are added up for each of the 168 hours of the week, in the time zone you pick, then smoothed with the neighbouring hours (a quarter from each side), because a post at 4:59 and one at 5:01 are really the same choice.</li>
+        <li>Each hour's score is the average weight of its posts, pulled toward the overall average as if it had three extra average posts. An hour with one lucky post doesn't beat an hour with twenty good ones.</li>
+        <li>Scores are shown against a typical post: 1.5× means posts published then did 50% better than usual.</li>
+      </ol>
+      <p>The activity view counts events per hour instead (comments for Reddit, published posts elsewhere), divided by how many times each hour of the week appears in the period read, so a window with two Tuesdays and one Wednesday doesn't make Tuesday look twice as busy.</p>
+      <p>When fewer than 15 posts can be scored, the recommendations come from activity instead, and the page says which one it used.</p>
+
+      <h2>What it can't tell you</h2>
+      <p>These are patterns in past posts, not a promise. A good hour for a community is partly a good hour because people already post then; what you post matters more than when. Small accounts produce noisy results, and the page warns when the sample is small. Counts on federated platforms (Mastodon, Lemmy) only include what the server you query has heard about.</p>
+
+      <h2>Open source</h2>
+      <p>The code is on <a href="https://github.com/emmalegrottaglie/tidewatch">GitHub</a> under the MIT license. The scoring lives in one file, <code>js/analysis.js</code>, with tests alongside.</p>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>Tidewatch is open source under the MIT license.</p>
+      <p><a href="./">Analyzer</a>&emsp;<a href="https://github.com/emmalegrottaglie/tidewatch">GitHub</a></p>
+    </div>
+  </footer>
+  <script type="module">import { initTheme } from './js/theme.js'; initTheme();</script>
+</body>
+</html>

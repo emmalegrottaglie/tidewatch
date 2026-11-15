@@ -1,0 +1,6 @@
+node_modules/
+.playwright-mcp/
+.claude/
+craft-anything-web-*/
+*.log
+.DS_Store

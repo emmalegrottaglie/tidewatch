@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tidewatch — best time to post, for any community or account</title>
+  <meta name="description" content="Free, open-source analyzer that finds the best time to post on any subreddit, Bluesky or Mastodon account, Lemmy community or Hacker News feed. Heatmaps, hourly and daily engagement, top sites, flair and phrases. Runs in your browser.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+  <script>try{const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch{}</script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="./">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor"/><path d="M4 20c3 0 3-3 6-3s3 3 6 3 3-3 6-3 3 3 6 3" fill="none" stroke="var(--paper)" stroke-width="2.4" stroke-linecap="round"/><circle cx="22" cy="10" r="3.2" fill="#f9ad26"/></svg>
+        Tidewatch
+      </a>
+      <nav class="site-nav" aria-label="Main">
+        <a href="./" aria-current="page">Analyzer</a>
+        <a href="tools.html">Tools</a>
+        <a href="method.html">How it works</a>
+        <a href="https://github.com/emmalegrottaglie/tidewatch">Source</a>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">Theme</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero wrap">
+      <h1>Post when your crowd is awake.</h1>
+      <p class="lede">Pick a community or account and see which hours of the week its posts do best, worked out from its own recent posts. Free, open source, and it runs entirely in your browser.</p>
+
+      <form class="search" id="search" novalidate>
+        <fieldset class="platforms" id="platforms">
+          <legend class="visually-hidden">Platform</legend>
+        </fieldset>
+        <div id="query-panel">
+          <div class="query-row">
+            <label class="query-field">
+              <span class="visually-hidden" id="query-label">Subreddit</span>
+              <span class="query-prefix" id="query-prefix" aria-hidden="true">r/</span>
+              <input id="query" name="q" autocomplete="off" spellcheck="false" aria-labelledby="query-label">
+            </label>
+            <button class="btn btn-primary" type="submit" id="go">Analyze</button>
+          </div>
+          <p class="field-error" id="query-error" role="alert" hidden></p>
+          <div class="examples" id="examples"></div>
+        </div>
+        <div id="import-panel" hidden>
+          <div class="dropzone" id="dropzone">
+            <p><strong>Drop an export file here</strong>, or <label class="btn btn-quiet" style="display:inline-flex;align-items:center;min-height:32px">choose a file<input type="file" id="file" accept=".csv,.tsv,.txt,.json,.js" class="visually-hidden"></label></p>
+            <p>CSV or JSON with one row per post: a date column and at least one number column (likes, comments, shares…). The file is read on your device and never uploaded.</p>
+            <details>
+              <summary>Where to get a file for each platform</summary>
+              <dl>
+                <dt>Instagram, Facebook</dt><dd>Meta Business Suite → Insights → Content → Export data (CSV).</dd>
+                <dt>X / Twitter</dt><dd>Settings → Your account → Download an archive, then drop <code>data/tweets.js</code>. Or the CSV from X analytics if your account has it.</dd>
+                <dt>TikTok</dt><dd>TikTok Studio → Analytics → Content → Download data.</dd>
+                <dt>LinkedIn</dt><dd>Page or creator analytics → Content → Export. Save the posts sheet as CSV.</dd>
+                <dt>YouTube</dt><dd>YouTube Studio → Analytics → Advanced mode → Content → Export (CSV). Use the video publish time column.</dd>
+                <dt>Threads, Pinterest, others</dt><dd>Any analytics CSV that lists each post with its publish time works.</dd>
+                <dt>Reddit with upvotes</dt><dd>While signed in to Reddit, open <code>reddit.com/r/NAME/top.json?t=year&amp;limit=100</code>, save the page, and drop it here.</dd>
+              </dl>
+            </details>
+            <div id="mapping" class="mapping" hidden></div>
+            <div id="mapping-actions" style="margin-top:14px" hidden><button class="btn btn-primary" type="button" id="import-go">Analyze file</button></div>
+          </div>
+          <p class="field-error" id="import-error" role="alert" hidden></p>
+        </div>
+      </form>
+
+      <div class="progress" id="progress" hidden>
+        <div class="progress-track" role="progressbar" aria-label="Loading posts" aria-valuemin="0" aria-valuemax="100" id="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+        <p id="progress-text" aria-live="polite">Starting…</p>
+        <button class="btn btn-quiet" type="button" id="cancel" style="margin-top:10px">Cancel</button>
+      </div>
+      <div class="notice" id="error" role="alert" hidden></div>
+    </section>
+
+    <section class="wrap empty-state" id="intro">
+      <div>
+        <h3>A week at a glance</h3>
+        <p>A heatmap of every hour of the week, with the three best slots marked, in your own time zone.</p>
+      </div>
+      <div>
+        <h3>The best hour on each day</h3>
+        <p>Whatever day you're posting, you get a time to aim for, plus the five strongest slots overall.</p>
+      </div>
+      <div>
+        <h3>What does well there</h3>
+        <p>The sites people link to, the flair and hashtags they use, the phrases that keep coming up, and the top posts.</p>
+      </div>
+      <div>
+        <h3>Your own accounts too</h3>
+        <p>Drop the analytics export from Instagram, TikTok, X, LinkedIn, Facebook or YouTube to analyze an account no public API reaches.</p>
+      </div>
+    </section>
+
+    <section class="wrap results" id="results" hidden aria-live="polite"></section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>Tidewatch is open source under the MIT license. Data comes from each platform's public API and stays in your browser.</p>
+      <p><a href="method.html">How it works</a>&emsp;<a href="https://github.com/emmalegrottaglie/tidewatch">GitHub</a></p>
+    </div>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

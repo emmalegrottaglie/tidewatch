@@ -1,0 +1,14 @@
+{
+  "name": "tidewatch",
+  "version": "1.0.0",
+  "description": "Open-source best-time-to-post analyzer for subreddits, Bluesky, Mastodon, Lemmy, Hacker News and analytics exports. Static site, no server.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/analysis.test.mjs tests/importer.test.mjs tests/tools.test.mjs",
+    "test:live": "node tests/sources.live.mjs",
+    "start": "python -m http.server 8765 --directory site"
+  },
+  "engines": { "node": ">=20" }
+}
