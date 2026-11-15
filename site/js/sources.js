@@ -633,6 +633,11 @@ const benchmark = {
     const bench = await res.json();
     const li = lang === 'all' ? -1 : bench.langs.indexOf(lang);
     const rows = bench.posts.filter((r) => li === -1 || r[5] === li);
+    if (!rows.length) {
+      const first = bench.intervals[0]?.[0];
+      const ready = first ? ` First results are due around ${new Date(first + bench.settleHours * 3600_000 + 3600_000).toLocaleString(undefined, { weekday: 'long', hour: 'numeric', minute: '2-digit' })}.` : '';
+      throw new SourceError(`The Bluesky benchmark is still collecting: sampled posts are re-read ${bench.settleHours / 24} days after they go up.${ready}`);
+    }
     const act = bench.activity.filter((r) => (li === -1 ? r[1] : r[2 + li]) > 0);
     const days = bench.intervals.length ? (Date.now() - bench.intervals[0][0]) / DAY : 0;
     const sampledHours = bench.intervals.reduce((s, [a, b]) => s + (b - a), 0) / 3600_000;
