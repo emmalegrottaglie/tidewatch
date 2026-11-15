@@ -56,26 +56,47 @@ export function quantize(values) {
   });
 }
 
-export function legend() {
+/**
+ * Map values to a diverging scale around `center`: --n4..--n1 below, --mid at
+ * it, --p1..--p4 above. Both sides share one extent so equal distances from
+ * typical get equally strong colours.
+ */
+export function divergingSteps(values, center) {
+  const nums = values.filter((v) => v !== null && Number.isFinite(v));
+  if (!nums.length) return values.map(() => null);
+  const extent = Math.max(...nums.map((v) => Math.abs(v - center))) || 1;
+  return values.map((v) => {
+    if (v === null || !Number.isFinite(v)) return null;
+    const t = (v - center) / extent; // -1..1
+    if (Math.abs(t) < 0.1) return 'mid';
+    const k = Math.min(4, Math.ceil(Math.abs(t) * 4));
+    return `${t < 0 ? 'n' : 'p'}${k}`;
+  });
+}
+
+function buildLegend(keys, lowLabel, highLabel) {
   const wrap = document.createElement('div');
   wrap.className = 'legend';
-  const less = document.createElement('span'); less.textContent = 'Less';
+  const lo = document.createElement('span'); lo.textContent = lowLabel;
   const ramp = document.createElement('span'); ramp.className = 'legend-ramp'; ramp.setAttribute('aria-hidden', 'true');
-  for (let i = 0; i < STEPS; i++) { const sw = document.createElement('i'); sw.style.setProperty('--c', `var(--s${i})`); ramp.append(sw); }
-  const more = document.createElement('span'); more.textContent = 'More';
-  const none = document.createElement('i'); none.className = 'none'; none.style.cssText = 'width:18px;height:12px;border-radius:2px;display:inline-block;margin-left:12px';
+  for (const k of keys) { const sw = document.createElement('i'); sw.style.setProperty('--c', `var(--${k})`); ramp.append(sw); }
+  const hi = document.createElement('span'); hi.textContent = highLabel;
+  const none = document.createElement('i'); none.className = 'none'; none.style.marginLeft = '12px';
   const noneWrap = document.createElement('span'); noneWrap.className = 'legend-ramp'; noneWrap.append(none);
   const noneLabel = document.createElement('span'); noneLabel.textContent = 'No data';
-  wrap.append(less, ramp, more, noneWrap, noneLabel);
+  wrap.append(lo, ramp, hi, noneWrap, noneLabel);
   return wrap;
 }
+
+export const legend = () => buildLegend(Array.from({ length: STEPS }, (_, i) => `s${i}`), 'Less', 'More');
+export const divergingLegend = () => buildLegend(['n4', 'n3', 'n2', 'n1', 'mid', 'p1', 'p2', 'p3', 'p4'], 'Below typical', 'Above typical');
 
 /**
  * Weekly heatmap. values: 168 numbers (null = no data). ranks: Map(slot -> 1..3).
  * tipLines(slot) returns the tooltip text lines.
  */
-export function renderHeatmap(container, { values, ranks = new Map(), tipLines, dayNames, hourLabel, label }) {
-  const steps = quantize(values);
+export function renderHeatmap(container, { values, ranks = new Map(), tipLines, dayNames, hourLabel, label, center = null }) {
+  const steps = center === null ? quantize(values) : divergingSteps(values, center);
   const grid = document.createElement('div');
   grid.className = 'heatmap';
   grid.setAttribute('role', 'grid');
@@ -103,7 +124,7 @@ export function renderHeatmap(container, { values, ranks = new Map(), tipLines, 
       b.className = 'cell';
       b.style.setProperty('--d', d);
       b.style.setProperty('--h', h);
-      if (steps[slot] !== null) b.style.setProperty('--c', `var(--s${steps[slot]})`);
+      if (steps[slot] !== null) b.style.setProperty('--c', typeof steps[slot] === 'number' ? `var(--s${steps[slot]})` : `var(--${steps[slot]})`);
       b.tabIndex = slot === 0 ? 0 : -1;
       b.dataset.slot = slot;
       const lines = tipLines(slot);

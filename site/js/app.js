@@ -1,6 +1,6 @@
 import { SOURCES, SourceError } from './sources.js';
 import { analyze, DAYS, hourLabel as fmtHour, gridToCSV, rankSlots, metricValue } from './analysis.js';
-import { renderHeatmap, renderArea, renderBars, legend } from './charts.js';
+import { renderHeatmap, renderArea, renderBars, legend, divergingLegend } from './charts.js';
 import { readFile, rowsToPosts } from './importer.js';
 import { initTheme } from './theme.js';
 
@@ -332,15 +332,16 @@ function render({ animate = false } = {}) {
       h('button', { type: 'button', 'aria-pressed': String(!perf), onclick: () => { state.mode = 'activity'; render(); } }, activityLabel === 'comments per hour' ? 'When people comment' : 'When posts go up'))
     : null;
   const heatPanel = panel(`Best times to post on ${name}`,
-    perf ? `How posts published in each hour ranked on ${metricNoun}: the share of other posts they beat, on average. 50% is typical; darker is better.` : `How many ${activityLabel.replace(' per hour', '')} appear in each hour of the week. Darker is busier.`,
+    perf ? `How posts published in each hour ranked on ${metricNoun}: the share of other posts they beat, on average. Blue hours beat the typical 50%, pink hours fall short.` : `How many ${activityLabel.replace(' per hour', '')} appear in each hour of the week. Darker is busier.`,
     heatHost,
-    [legend(), modeSwitch, h('span', {}, `Time zone: ${state.timeZone}`)]);
+    [perf ? divergingLegend() : legend(), modeSwitch, h('span', {}, `Time zone: ${state.timeZone}`)]);
   heatPanel.querySelector('.panel-head').append(tableView('Weekly grid', ['Day', ...Array.from({ length: 24 }, (_, i) => hourText(i))],
     DAYS.map((d, di) => [d, ...Array.from({ length: 24 }, (_, hr) => { const v = values[di * 24 + hr]; return v === null ? '—' : perf ? fmtPct(v) : fmtNum(v); })])));
   out.append(heatPanel);
   renderHeatmap(heatHost, {
     values,
     ranks,
+    center: perf ? 50 : null,
     dayNames: DAYS,
     hourLabel: (hr) => hourText(hr),
     label: `Heatmap of ${perf ? 'post performance' : activityLabel} by day and hour`,
