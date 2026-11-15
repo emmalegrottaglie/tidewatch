@@ -15,7 +15,7 @@ platform's public API, and nothing is stored or tracked.
 
 | Platform | Input | Data source | Score |
 | --- | --- | --- | --- |
-| Reddit | `photography` | [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift) archive, last 28 days | Comments each post received in its first day |
+| Reddit | `photography` | [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift) archive, last 28 days | Upvotes and comments |
 | Bluesky | `name.bsky.social` or a profile link | `public.api.bsky.app` | Likes, reposts, replies, quotes |
 | Mastodon | `@user@server` or `#tag@server` | The account's own server | Favourites, boosts, replies |
 | Lemmy | `community@server` | The community's server | Score and comments |
@@ -30,20 +30,20 @@ before analyzing.
 ### Why Reddit goes through an archive
 
 reddit.com refuses requests from signed-out browsers (HTTP 403, no CORS headers), so a static site
-can't read it directly. Arctic Shift captures posts and comments seconds after they appear, but its
-upvote counts are frozen at that moment, so Tidewatch scores each post by the comments it went on to
-receive. For very busy subreddits, where reading every comment isn't feasible, it samples comment
-activity every two hours across four weeks and recommends the busiest hours instead. The results
-page always says which method it used.
+can't read it directly. Arctic Shift captures each post seconds after it appears and fetches it again
+about 36 hours later, updating its score and comment count. Tidewatch only scores posts older than 48
+hours, so the numbers come from that second fetch. For very busy subreddits it reads one page of posts
+every two hours across four weeks instead of everything, and the results page says so.
 
 ## How the scoring works
 
-1. Posts younger than 24 hours are excluded; they are still collecting interactions.
-2. Each post's weight is its result divided by the median post's, capped at 5×.
-3. Weights and counts are summed for each of the 168 hours of the week, in the chosen time zone,
-   and smoothed with neighbouring hours.
-4. Each hour's score is the mean weight, shrunk toward the overall mean by three imaginary average
-   posts, then expressed relative to a typical post (1.0×).
+1. Posts younger than 24 hours (48 on Reddit) are excluded; they are still collecting interactions.
+2. Each post gets its percentile rank among all posts read (the share of posts it beat, ties split),
+   which is graded but bounded and indifferent to how skewed the platform's numbers are.
+3. Ranks and counts are summed for each of the 168 hours of the week, in the chosen time zone, and
+   smoothed with neighbouring hours.
+4. Each hour's score is the mean rank, shrunk toward 50% by three imaginary average posts. 50% is a
+   typical hour; 65% means posts published then beat 65% of the others on average.
 
 The full explanation is on the site's [How it works](site/method.html) page, and the code is in
 [`site/js/analysis.js`](site/js/analysis.js).

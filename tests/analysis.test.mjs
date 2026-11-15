@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   dayHour, slotOf, median, smoothRing, exposureHours, scoreSlots, activityRate,
-  rankSlots, bestPerDay, phrases, groupBy, analyze, metricValue, hourLabel, tokenize, gridToCSV,
+  rankSlots, bestPerDay, phrases, groupBy, analyze, metricValue, hourLabel, tokenize, gridToCSV, percentileRanks,
 } from '../site/js/analysis.js';
 
 const HOUR = 3600_000;
@@ -52,21 +52,21 @@ test('scoreSlots finds the hour where posts do better, not the hour with most po
   for (let w = 0; w < 8; w++) posts.push(post(at(4, 18, w % 4) + w, 40));
   const g = scoreSlots(posts, { timeZone: 'UTC', metric: 'likes' });
   assert.ok(g.valid);
-  const best = rankSlots(g.lift, 1)[0];
+  const best = rankSlots(g.score, 1)[0];
   assert.equal(best.day, 4);
   assert.equal(best.hour, 18);
   // Monday 09:00 is busier but below average.
-  assert.ok(g.lift[1 * 24 + 9] < 1);
-  assert.ok(g.lift[4 * 24 + 18] > 1);
+  assert.ok(g.score[1 * 24 + 9] < 50);
+  assert.ok(g.score[4 * 24 + 18] > 50);
 });
 
-test('scoreSlots caps a single viral post so it cannot win alone', () => {
+test('a single viral post cannot win alone', () => {
   const posts = [];
   for (let w = 0; w < 12; w++) posts.push(post(at(3, 12, w % 4) + w, 30)); // steady strong Wednesday noon
   for (let w = 0; w < 30; w++) posts.push(post(at(w % 7, (w * 5) % 24, 1) + w, 10)); // background
   posts.push(post(at(6, 3), 100000)); // one viral post Saturday 03:00
   const g = scoreSlots(posts, { timeZone: 'UTC', metric: 'likes' });
-  const best = rankSlots(g.lift, 1)[0];
+  const best = rankSlots(g.score, 1)[0];
   assert.equal(best.slot, 3 * 24 + 12);
 });
 
@@ -156,5 +156,23 @@ test('hourLabel and CSV output', () => {
   const r = analyze({ posts }, { timeZone: 'UTC', metric: 'likes', now: at(0, 0, 5) });
   const csv = gridToCSV(r).split('\n');
   assert.equal(csv.length, 169);
-  assert.equal(csv[0], 'day,hour,performance_lift,posts_smoothed,activity_per_hour');
+  assert.equal(csv[0], 'day,hour,avg_percentile_rank,posts_smoothed,activity_per_hour');
+});
+
+test('percentileRanks splits ties and averages to one half', () => {
+  assert.deepEqual(percentileRanks([10, 20, 30]), [0, 0.5, 1]);
+  assert.deepEqual(percentileRanks([1, 1, 5]), [0.25, 0.25, 1]);
+  const r = percentileRanks([1, 1, 1, 1, 3000, 7, 2]);
+  assert.ok(Math.abs(r.reduce((a, b) => a + b, 0) / r.length - 0.5) < 1e-9);
+});
+
+test('scores are graded on skewed data, unlike a capped ratio', () => {
+  // Typical Reddit shape: most posts get 1 upvote. Hour A's posts get 3000, hour B's get 5.
+  const posts = [];
+  for (let i = 0; i < 40; i++) posts.push(post(at(i % 7, (i * 7) % 24, 2) + i, 1));
+  for (let i = 0; i < 6; i++) posts.push(post(at(2, 9, i % 4) + i, 3000));
+  for (let i = 0; i < 6; i++) posts.push(post(at(5, 15, i % 4) + i, 5));
+  const g = scoreSlots(posts, { timeZone: 'UTC', metric: 'likes' });
+  assert.ok(g.score[2 * 24 + 9] > g.score[5 * 24 + 15]);
+  assert.ok(g.score[5 * 24 + 15] > 50);
 });

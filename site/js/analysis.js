@@ -93,65 +93,73 @@ export function metricValue(post, metric) {
 }
 
 /**
- * Score every hour of the week by how well posts published then performed.
- *
- * 1. Each eligible post gets a weight: its metric divided by the median post,
- *    capped at `cap`, so one viral post can't decide the answer alone.
- * 2. Weights and post counts are summed per slot, then smoothed over
- *    neighbouring hours.
- * 3. Each slot's score is the mean weight of its posts, shrunk toward the
- *    overall mean by `prior` imaginary average posts, so an hour with one lucky
- *    post doesn't outrank an hour with twenty good ones.
- * 4. Scores are divided by the overall mean: 1.0 is a typical hour, 1.5 means
- *    posts published then did 50% better than usual.
+ * Percentile rank of every value: the share of the other posts it beat, with
+ * ties counted as half. Returns numbers in [0, 1]; their mean is always 0.5.
  */
-export function scoreSlots(posts, { timeZone, metric = 'engagement', cap = 5, prior = 3 } = {}) {
+export function percentileRanks(values) {
+  const n = values.length;
+  if (n < 2) return values.map(() => 0.5);
+  const order = values.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]);
+  const ranks = new Array(n);
+  for (let i = 0; i < n;) {
+    let j = i;
+    while (j + 1 < n && order[j + 1][0] === order[i][0]) j++;
+    // Posts i..j tie: each beat i others and tied with (j - i) others.
+    const r = (i + (j - i) / 2) / (n - 1);
+    for (let k = i; k <= j; k++) ranks[order[k][1]] = r;
+    i = j + 1;
+  }
+  return ranks;
+}
+
+/**
+ * Score every hour of the week by how well posts published then ranked.
+ *
+ * 1. Each post's result is turned into its percentile rank among all posts
+ *    read: 0.9 means it beat 90% of them. Ranks are graded (a huge post beats
+ *    more than a decent one) but bounded, so one viral post can't decide the
+ *    answer, and they work the same whether typical posts get 1 like or 10,000.
+ * 2. Ranks and post counts are summed per slot, then smoothed over neighbouring
+ *    hours.
+ * 3. Each slot's average rank is shrunk toward 50% by `prior` imaginary average
+ *    posts, so an hour with one lucky post doesn't outrank an hour with twenty
+ *    good ones.
+ * 4. `score` is that average as a percentage: 50 is a typical hour, 65 means
+ *    posts published then beat 65% of posts on average.
+ */
+export function scoreSlots(posts, { timeZone, metric = 'engagement', prior = 3 } = {}) {
   const values = posts.map((p) => metricValue(p, metric));
-  let base = median(values);
-  if (base <= 0) base = values.reduce((a, b) => a + b, 0) / (values.length || 1);
   const sums = new Array(SLOTS).fill(0);
   const counts = new Array(SLOTS).fill(0);
-  if (base <= 0 || !posts.length) {
-    return { lift: new Array(SLOTS).fill(null), share: new Array(SLOTS).fill(0), counts, rawCounts: counts.slice(), base: 0, mean: 0, valid: false };
-  }
-  let total = 0;
+  const valid = posts.length >= 2 && values.some((v) => v !== values[0]);
+  if (!valid) return { score: new Array(SLOTS).fill(null), counts, rawCounts: counts.slice(), valid: false };
+  const ranks = percentileRanks(values);
   posts.forEach((p, i) => {
-    const w = Math.min(values[i] / base, cap);
     const s = slotOf(p.createdAt, timeZone);
-    sums[s] += w;
+    sums[s] += ranks[i];
     counts[s] += 1;
-    total += w;
   });
-  const mean = total / posts.length;
   const sSums = smoothRing(sums);
   const sCounts = smoothRing(counts);
-  const lift = sSums.map((s, i) => (s + prior * mean) / (sCounts[i] + prior) / mean);
-  const sumAll = sSums.reduce((a, b) => a + b, 0);
-  const share = sSums.map((s) => (sumAll ? s / sumAll : 0));
-  return { lift, share, counts: sCounts, rawCounts: counts, base, mean, valid: true, weightSums: sums };
+  const score = sSums.map((s, i) => ((s + prior * 0.5) / (sCounts[i] + prior)) * 100);
+  return { score, counts: sCounts, rawCounts: counts, valid: true };
 }
 
 /** Collapse the grid to one score per hour of day or per weekday, using the same shrinkage. */
-export function collapse(posts, { timeZone, metric = 'engagement', cap = 5, prior = 3, by }) {
+export function collapse(posts, { timeZone, metric = 'engagement', prior = 3, by }) {
   const size = by === 'hour' ? 24 : 7;
   const values = posts.map((p) => metricValue(p, metric));
-  let base = median(values);
-  if (base <= 0) base = values.reduce((a, b) => a + b, 0) / (values.length || 1);
   const sums = new Array(size).fill(0);
   const counts = new Array(size).fill(0);
-  if (base <= 0 || !posts.length) return { lift: new Array(size).fill(null), counts, share: new Array(size).fill(0) };
-  let total = 0;
+  if (posts.length < 2 || values.every((v) => v === values[0])) return { score: new Array(size).fill(null), counts };
+  const ranks = percentileRanks(values);
   posts.forEach((p, i) => {
-    const w = Math.min(values[i] / base, cap);
     const { day, hour } = dayHour(p.createdAt, timeZone);
     const k = by === 'hour' ? hour : day;
-    sums[k] += w;
+    sums[k] += ranks[i];
     counts[k] += 1;
-    total += w;
   });
-  const mean = total / posts.length;
-  const lift = sums.map((s, i) => (s + prior * mean) / (counts[i] + prior) / mean);
-  return { lift, counts, share: sums.map((s) => s / total) };
+  return { score: sums.map((s, i) => ((s + prior * 0.5) / (counts[i] + prior)) * 100), counts };
 }
 
 /** Activity rate (events per hour) for each weekly slot, from raw timestamps and the intervals they cover. */
@@ -288,7 +296,7 @@ export function analyze(data, { timeZone, metric = 'engagement', now = Date.now(
   // When there aren't enough scored posts, recommendations come from activity instead.
   const minPosts = 15;
   const usePerformance = grid.valid && eligible.length >= minPosts;
-  const rankingScores = usePerformance ? grid.lift : activity ? activity.rate : grid.lift;
+  const rankingScores = usePerformance ? grid.score : activity ? activity.rate : grid.score;
   const basis = usePerformance ? 'performance' : activity ? 'activity' : grid.valid ? 'performance' : 'none';
 
   const sorted = [...eligible].sort((a, b) => metricValue(b, metric) - metricValue(a, metric));
@@ -326,11 +334,11 @@ export function hourLabel(hour, { hour12 = true, style = 'short' } = {}) {
 
 /** CSV export of the weekly grid. */
 export function gridToCSV(result) {
-  const rows = [['day', 'hour', 'performance_lift', 'posts_smoothed', 'activity_per_hour']];
+  const rows = [['day', 'hour', 'avg_percentile_rank', 'posts_smoothed', 'activity_per_hour']];
   for (let s = 0; s < SLOTS; s++) {
-    const l = result.grid.lift[s];
+    const l = result.grid.score[s];
     const a = result.activity ? result.activity.rate[s] : null;
-    rows.push([DAYS[Math.floor(s / 24)], s % 24, l == null ? '' : l.toFixed(3), result.grid.counts[s].toFixed(2), a == null ? '' : a.toFixed(3)]);
+    rows.push([DAYS[Math.floor(s / 24)], s % 24, l == null ? '' : l.toFixed(1), result.grid.counts[s].toFixed(2), a == null ? '' : a.toFixed(3)]);
   }
   return rows.map((r) => r.join(',')).join('\n');
 }

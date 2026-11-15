@@ -70,13 +70,15 @@ async function pool(jobs, limit) {
 
 /* ------------------------------------------------------------------ Reddit */
 // reddit.com no longer answers logged-out browser requests (403, no CORS
-// headers), so live subreddit data comes from the Arctic Shift archive
-// (https://arctic-shift.photon-reddit.com), which records posts and comments
-// seconds after they appear. Its score field is frozen at that moment, so
-// upvotes can't be used; instead each post is scored by how many comments it
-// went on to receive, counted from the archived comments themselves.
+// headers), so subreddit data comes from the Arctic Shift archive
+// (https://arctic-shift.photon-reddit.com). It records each post seconds after
+// it appears, then fetches it again about 36 hours later and updates its score
+// and comment count, so posts older than two days carry real upvote and
+// comment totals.
 
 const ARCTIC = 'https://arctic-shift.photon-reddit.com/api';
+// Only posts this old are scored: the archive's second fetch happens around 36 hours.
+const REDDIT_SETTLED_HOURS = 48;
 
 /**
  * Fetch an archive endpoint backwards in time over several lanes at once.
@@ -112,19 +114,19 @@ async function fetchLanes({ path, params, start, end, lanes, pagesPerLane, signa
 }
 
 /**
- * One page of comments before each of `samples` moments, two hours apart, with
- * consecutive samples placed in different weeks so no single week dominates.
- * Each page covers a short stretch exactly, which is enough to estimate the
- * comment rate at that hour of the week.
+ * One page before each of `samples` moments, two hours apart, with consecutive
+ * samples placed in different weeks so no single week dominates. Each page
+ * covers a short stretch exactly, which is enough to estimate the rate at that
+ * hour of the week and to collect posts published then.
  */
-async function sampleComments({ params, end, samples, signal, onPage }) {
+async function samplePages({ path, params, end, samples, signal, onPage }) {
   const items = [];
   const intervals = [];
   const hourAligned = Math.floor(end / 3600_000) * 3600_000;
   const jobs = Array.from({ length: samples }, (_, i) => async () => {
     const t = hourAligned - i * 2 * 3600_000 - (i % 4) * 7 * DAY + 50 * 60_000; // 50 minutes into the hour
     const q = new URLSearchParams({ ...params, before: String(Math.floor(t / 1000)), sort: 'desc' });
-    const data = (await getJSON(`${ARCTIC}/comments/search?${q}`, { signal })).data || [];
+    const data = (await getJSON(`${ARCTIC}${path}?${q}`, { signal })).data || [];
     onPage?.();
     if (data.length < 2) return;
     for (const d of data) items.push(d);
@@ -153,6 +155,13 @@ function formatCount(n) {
 }
 export { formatCount };
 
+/** How long one page of posts lasted just before the settled cutoff, from a single probe read. */
+async function postPageSpan(params, signal) {
+  const before = Math.floor((Date.now() - REDDIT_SETTLED_HOURS * 3600_000) / 1000);
+  const probe = (await getJSON(`${ARCTIC}/posts/search?${new URLSearchParams({ ...params, sort: 'desc', before: String(before) })}`, { signal })).data || [];
+  return { count: probe.length, span: probe.length > 1 ? (probe[0].created_utc - probe[probe.length - 1].created_utc) * 1000 : DAY };
+}
+
 const reddit = {
   id: 'reddit',
   label: 'Reddit',
@@ -161,8 +170,12 @@ const reddit = {
   prefix: 'r/',
   placeholder: 'photography',
   examples: ['photography', 'gaming', 'technology', 'science', 'AskReddit', 'SideProject', 'analog', 'webdev'],
-  metrics: [{ id: 'comments', label: 'Comments received', noun: 'comments' }],
-  defaultMetric: 'comments',
+  metrics: [
+    { id: 'upvotes', label: 'Upvotes', noun: 'upvotes' },
+    { id: 'comments', label: 'Comments', noun: 'comments' },
+    { id: 'engagement', label: 'Upvotes + comments' },
+  ],
+  defaultMetric: 'upvotes',
   normalize: (q) => q.trim().replace(/^https?:\/\/(www\.|old\.)?reddit\.com\//i, '').replace(/^\/?r\//i, '').replace(/\/.*$/, ''),
   validate: (q) => /^[A-Za-z0-9_]{2,21}$/.test(q) || 'Subreddit names are 2-21 letters, numbers or underscores.',
   title: (q) => `r/${q}`,
@@ -173,31 +186,26 @@ const reddit = {
     const meta = (metaBody.data || []).find((d) => d.display_name.toLowerCase() === name.toLowerCase());
     if (!meta) throw new SourceError(`No subreddit called r/${name} in the archive. Check the spelling.`);
 
-    const commentParams = { subreddit: meta.display_name, limit: 'auto', fields: 'created_utc,link_id' };
-    // Probe comment density: one page from now tells us how long a page lasts.
-    const probe = (await getJSON(`${ARCTIC}/comments/search?${new URLSearchParams({ ...commentParams, sort: 'desc' })}`, { signal })).data || [];
-    const probeSpan = probe.length > 1 ? (probe[0].created_utc - probe[probe.length - 1].created_utc) * 1000 : DAY;
-    const commentPages = 4 * 12;
-    // Busy subreddits would need far more pages than we can afford to read every comment,
-    // so they get a spread-out sample instead: short reads every two hours over four weeks.
-    const sampled = probe.length >= 50 && probeSpan * commentPages < (end - start) * 0.5;
+    const sub = meta.display_name;
+    const postParams = { subreddit: sub, limit: '100', fields: 'id,created_utc,title,url,link_flair_text,author,over_18,score,num_comments' };
+    const commentParams = { subreddit: sub, limit: 'auto', fields: 'created_utc' };
+    const postLanes = 4, postPagesPerLane = 5, commentLanes = 4, commentPagesPerLane = 12, samples = 84;
+    // Busy subreddits publish more posts than we can afford to read over four weeks, so they
+    // get a spread-out sample instead: one page every two hours, rotated across the weeks.
+    const probe = await postPageSpan(postParams, signal);
+    const sampled = probe.count >= 50 && probe.span * postLanes * postPagesPerLane < (end - start) * 0.6;
 
     let pages = 0;
-    const totalPages = 4 * 5 + (sampled ? 84 : commentPages);
-    const tick = () => onProgress?.(++pages / totalPages, `Reading r/${meta.display_name} from the archive`);
+    const totalPages = sampled ? samples : postLanes * postPagesPerLane + commentLanes * commentPagesPerLane;
+    const tick = () => onProgress?.(++pages / totalPages, `Reading r/${sub} from the archive`);
     // One endpoint at a time keeps us to three requests in flight, which the archive tolerates.
-    const postsRes = await fetchLanes({ path: '/posts/search', params: { subreddit: meta.display_name, limit: '100', fields: 'id,created_utc,title,url,link_flair_text,author,over_18' }, start, end, lanes: 4, pagesPerLane: 5, signal, onPage: tick });
-    const commentsRes = sampled
-      ? await sampleComments({ params: commentParams, end, samples: 84, signal, onPage: tick })
-      : await fetchLanes({ path: '/comments/search', params: commentParams, start, end, lanes: 4, pagesPerLane: 12, signal, onPage: tick });
+    const postsRes = sampled
+      ? await samplePages({ path: '/posts/search', params: postParams, end: end - REDDIT_SETTLED_HOURS * 3600_000, samples, signal, onPage: tick })
+      : await fetchLanes({ path: '/posts/search', params: postParams, start, end, lanes: postLanes, pagesPerLane: postPagesPerLane, signal, onPage: tick });
+    // For subreddits small enough to read in full, comments show when people are around.
+    const commentsRes = sampled ? null
+      : await fetchLanes({ path: '/comments/search', params: commentParams, start, end, lanes: commentLanes, pagesPerLane: commentPagesPerLane, signal, onPage: tick });
 
-    const commentsByPost = new Map();
-    const commentTimes = [];
-    for (const c of commentsRes.items) {
-      commentTimes.push(c.created_utc * 1000);
-      const id = (c.link_id || '').replace(/^t3_/, '');
-      commentsByPost.set(id, (commentsByPost.get(id) || 0) + 1);
-    }
     const seen = new Set();
     const posts = [];
     for (const p of postsRes.items) {
@@ -208,9 +216,9 @@ const reddit = {
       posts.push({
         id: p.id,
         createdAt: p.created_utc * 1000,
-        metrics: { comments: commentsByPost.get(p.id) || 0 },
+        metrics: { upvotes: Math.max(0, p.score || 0), comments: p.num_comments || 0 },
         title: p.title,
-        url: `https://www.reddit.com/r/${meta.display_name}/comments/${p.id}/`,
+        url: `https://www.reddit.com/r/${sub}/comments/${p.id}/`,
         domain: host === 'i.redd.it' || host === 'v.redd.it' || host === 'reddit.com' ? (host === 'v.redd.it' ? 'Reddit video' : host === 'i.redd.it' ? 'Reddit image' : 'Reddit gallery') : host,
         tags: p.link_flair_text ? [p.link_flair_text] : [],
         author: p.author,
@@ -220,16 +228,19 @@ const reddit = {
     }
     const covered = (list) => list.reduce((s, [a, b]) => s + (b - a), 0);
     const notes = [];
-    const commentDays = covered(commentsRes.intervals) / DAY;
-    if (commentsRes.sampled) {
-      notes.push(`r/${meta.display_name} gets too many comments to read them all, so activity comes from ${commentsRes.intervals.length} short samples taken every two hours across four weeks. There isn't enough per-post data to score posts, so the recommendations follow when the community comments most.`);
-    } else if (commentDays < days * 0.9) {
-      notes.push(`r/${meta.display_name} is busy, so the comment sample covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} spread across the last ${days} days. Hours outside it are left blank.`);
+    let activity;
+    if (sampled) {
+      notes.push(`r/${sub} posts too often to read four weeks in full, so these results come from ${postsRes.intervals.length} short samples taken every two hours across four weeks (${posts.length.toLocaleString()} posts).`);
+      activity = { timestamps: posts.map((p) => p.createdAt), intervals: postsRes.intervals, label: 'posts per hour' };
+    } else {
+      const commentDays = covered(commentsRes.intervals) / DAY;
+      if (commentDays < days * 0.9) notes.push(`The comment activity view covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} of the last ${days}, because r/${sub} is busy. Hours outside it are left blank there.`);
+      activity = { timestamps: commentsRes.items.map((c) => c.created_utc * 1000), intervals: commentsRes.intervals, label: 'comments per hour' };
     }
     return {
       profile: {
-        name: `r/${meta.display_name}`,
-        url: `https://www.reddit.com/r/${meta.display_name}/`,
+        name: `r/${sub}`,
+        url: `https://www.reddit.com/r/${sub}/`,
         description: meta.public_description,
         stats: [
           { label: 'Members', value: formatCount(meta.subscribers) },
@@ -237,10 +248,10 @@ const reddit = {
         ],
       },
       posts,
-      perfIntervals: commentsRes.intervals,
-      activity: { timestamps: commentTimes, intervals: commentsRes.intervals, label: 'comments per hour' },
+      minAgeHours: REDDIT_SETTLED_HOURS,
+      activity,
       notes,
-      method: 'Each post is scored by the comments it received in its first day, counted from archived comments. Upvote counts in the archive are recorded seconds after posting, so they are not used. Activity is the number of comments written per hour.',
+      method: 'Each post is scored by its upvotes and comments as the archive recorded them on its second visit, about 36 hours after posting. Posts younger than two days are left out because they haven’t been re-read yet.',
       sourceCredit: { label: 'Arctic Shift archive', url: 'https://github.com/ArthurHeitmann/arctic_shift' },
     };
   },

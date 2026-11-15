@@ -40,7 +40,7 @@ function h(tag, attrs = {}, ...children) {
 }
 const hourText = (hr) => fmtHour(hr, { hour12 });
 const hourRange = (hr) => `${fmtHour(hr, { hour12, style: 'range' })} – ${fmtHour((hr + 1) % 24, { hour12, style: 'range' })}`;
-const fmtLift = (v) => `${v.toFixed(v >= 10 ? 0 : 2)}×`;
+const fmtPct = (v) => `${Math.round(v)}%`;
 const fmtNum = (v) => (v >= 100 ? Math.round(v).toLocaleString() : v >= 10 ? v.toFixed(1) : v.toFixed(2));
 
 /* ---------- platform picker ---------- */
@@ -304,7 +304,7 @@ function render({ animate = false } = {}) {
   if (best) {
     verdict.append(h('p', { class: 'verdict-time' }, `${DAYS[best.day]}, ${hourText(best.hour)}`, h('small', {}, `Best time to post on ${name}`)));
     if (r.basis === 'performance') {
-      verdict.append(h('p', {}, `Posts published around ${DAYS[best.day]} at ${hourText(best.hour)} got ${fmtLift(best.score)} the ${metricNoun} of a typical post here, based on ${r.counts.eligible.toLocaleString()} posts. Times are in ${state.timeZone}.`));
+      verdict.append(h('p', {}, `Posts published around ${DAYS[best.day]} at ${hourText(best.hour)} beat ${fmtPct(best.score)} of ${name}'s other posts on ${metricNoun}, on average, where a typical hour scores 50%. Based on ${r.counts.eligible.toLocaleString()} posts; times are in ${state.timeZone}.`));
     } else {
       const rates = r.activity.rate.filter((x) => x !== null);
       const avg = rates.reduce((a, b) => a + b, 0) / rates.length;
@@ -316,12 +316,13 @@ function render({ animate = false } = {}) {
   }
   const notes = [...(data.notes || [])];
   if (r.lowSample && r.basis === 'performance') notes.push(`Only ${r.counts.eligible} posts could be scored, so treat these times as a rough guide.`);
-  if (data.minAgeHours !== 0 && r.counts.fetched > r.counts.eligible && state.source.id !== 'reddit') notes.push('Posts from the last 24 hours are still collecting interactions, so they are left out of the scores.');
+  const minAge = data.minAgeHours ?? 24;
+  if (minAge > 0 && r.counts.fetched > r.counts.eligible) notes.push(`Posts from the last ${minAge === 24 ? '24 hours' : `${minAge / 24} days`} are still collecting interactions, so they are left out of the scores.`);
   if (notes.length) verdict.append(h('div', { class: 'notes' }, notes.map((n) => h('p', {}, n))));
   out.append(verdict);
 
   /* heatmap */
-  const values = perf ? r.grid.lift.map((v, i) => (r.grid.counts[i] > 0 ? v : null)) : r.activity.rate;
+  const values = perf ? r.grid.score.map((v, i) => (r.grid.counts[i] > 0 ? v : null)) : r.activity.rate;
   const ranked = rankSlots(values, 3);
   const ranks = new Map(ranked.map((s, i) => [s.slot, i + 1]));
   const heatHost = h('div', { class: 'heat-container' });
@@ -331,11 +332,11 @@ function render({ animate = false } = {}) {
       h('button', { type: 'button', 'aria-pressed': String(!perf), onclick: () => { state.mode = 'activity'; render(); } }, activityLabel === 'comments per hour' ? 'When people comment' : 'When posts go up'))
     : null;
   const heatPanel = panel(`Best times to post on ${name}`,
-    perf ? `How posts published in each hour did compared with a typical post (${metricLabel.toLowerCase()}). Darker is better.` : `How many ${activityLabel.replace(' per hour', '')} appear in each hour of the week. Darker is busier.`,
+    perf ? `How posts published in each hour ranked on ${metricNoun}: the share of other posts they beat, on average. 50% is typical; darker is better.` : `How many ${activityLabel.replace(' per hour', '')} appear in each hour of the week. Darker is busier.`,
     heatHost,
     [legend(), modeSwitch, h('span', {}, `Time zone: ${state.timeZone}`)]);
   heatPanel.querySelector('.panel-head').append(tableView('Weekly grid', ['Day', ...Array.from({ length: 24 }, (_, i) => hourText(i))],
-    DAYS.map((d, di) => [d, ...Array.from({ length: 24 }, (_, hr) => { const v = values[di * 24 + hr]; return v === null ? '—' : perf ? fmtLift(v) : fmtNum(v); })])));
+    DAYS.map((d, di) => [d, ...Array.from({ length: 24 }, (_, hr) => { const v = values[di * 24 + hr]; return v === null ? '—' : perf ? fmtPct(v) : fmtNum(v); })])));
   out.append(heatPanel);
   renderHeatmap(heatHost, {
     values,
@@ -350,48 +351,48 @@ function render({ animate = false } = {}) {
       if (v === null) return [head, 'No data for this hour'];
       if (perf) {
         const n = r.grid.rawCounts[slot];
-        return [head, `${fmtLift(v)} the typical ${metricNoun}`, n ? `${n} post${n === 1 ? '' : 's'} published in this hour` : 'No posts in this exact hour; estimated from the hours next to it'];
+        return [head, `Beat ${fmtPct(v)} of posts on ${metricNoun}`, n ? `${n} post${n === 1 ? '' : 's'} published in this hour` : 'No posts in this exact hour; estimated from the hours next to it'];
       }
       return [head, `${fmtNum(v)} ${activityLabel}`];
     },
   });
 
   /* hour + day charts */
-  const hourVals = perf ? r.byHour.lift.map((v, i) => (r.byHour.counts[i] ? v : null)) : collapseActivity(r.activity.rate, 'hour');
-  const dayVals = perf ? r.byDay.lift.map((v, i) => (r.byDay.counts[i] ? v : null)) : collapseActivity(r.activity.rate, 'day');
-  const fmtVal = perf ? fmtLift : fmtNum;
+  const hourVals = perf ? r.byHour.score.map((v, i) => (r.byHour.counts[i] ? v : null)) : collapseActivity(r.activity.rate, 'hour');
+  const dayVals = perf ? r.byDay.score.map((v, i) => (r.byDay.counts[i] ? v : null)) : collapseActivity(r.activity.rate, 'day');
+  const fmtVal = perf ? fmtPct : fmtNum;
   const hourHost = h('div', { class: 'chart' });
   const dayHost = h('div', { class: 'chart' });
   const bestHour = argmax(hourVals);
   const bestDay = argmax(dayVals);
   const hourPanel = panel(`Best hour to post on ${name}`,
-    perf ? `${metricLabel} by the hour a post went up, against a typical post (1×).` : `${capitalize(activityLabel)} by hour of day, all days together.`,
+    perf ? `How posts ranked on ${metricNoun} by the hour they went up (50% is typical).` : `${capitalize(activityLabel)} by hour of day, all days together.`,
     hourHost,
     bestHour >= 0 ? h('span', {}, `Peak: ${hourText(bestHour)}, ${fmtVal(hourVals[bestHour])}`) : null);
-  hourPanel.querySelector('.panel-head').append(tableView('By hour', ['Hour', perf ? 'vs typical' : capitalize(activityLabel), perf ? 'Posts' : null].filter(Boolean),
+  hourPanel.querySelector('.panel-head').append(tableView('By hour', ['Hour', perf ? 'Beat on average' : capitalize(activityLabel), perf ? 'Posts' : null].filter(Boolean),
     hourVals.map((v, i) => [hourRange(i), v === null ? '—' : fmtVal(v), perf ? String(r.byHour.counts[i]) : null].filter((x) => x !== null))));
   const dayPanel = panel(`Best day to post on ${name}`,
-    perf ? `${metricLabel} by the day a post went up, against a typical post (1×).` : `${capitalize(activityLabel)} by day of week.`,
+    perf ? `How posts ranked on ${metricNoun} by the day they went up (50% is typical).` : `${capitalize(activityLabel)} by day of week.`,
     dayHost,
     bestDay >= 0 ? h('span', {}, `Best day: ${DAYS[bestDay]}, ${fmtVal(dayVals[bestDay])}`) : null);
-  dayPanel.querySelector('.panel-head').append(tableView('By day', ['Day', perf ? 'vs typical' : capitalize(activityLabel), perf ? 'Posts' : null].filter(Boolean),
+  dayPanel.querySelector('.panel-head').append(tableView('By day', ['Day', perf ? 'Beat on average' : capitalize(activityLabel), perf ? 'Posts' : null].filter(Boolean),
     dayVals.map((v, i) => [DAYS[i], v === null ? '—' : fmtVal(v), perf ? String(r.byDay.counts[i]) : null].filter((x) => x !== null))));
   out.append(h('div', { class: 'grid-2' }, hourPanel, dayPanel));
   renderArea(hourHost, {
-    values: hourVals, xLabel: hourText, yFormat: perf ? (v) => `${v}×` : fmtNum,
-    reference: perf ? 1 : null, referenceLabel: 'typical',
+    values: hourVals, xLabel: hourText, yFormat: perf ? (v) => `${v}%` : fmtNum,
+    reference: perf ? 50 : null, referenceLabel: 'typical',
     label: `Line chart of ${perf ? 'performance' : activityLabel} by hour of day`,
-    tipLines: (i) => [hourRange(i), hourVals[i] === null ? 'No data' : perf ? `${fmtLift(hourVals[i])} the typical ${metricNoun}` : `${fmtNum(hourVals[i])} ${activityLabel}`, perf ? `${r.byHour.counts[i]} posts` : ''].filter(Boolean),
+    tipLines: (i) => [hourRange(i), hourVals[i] === null ? 'No data' : perf ? `Beat ${fmtPct(hourVals[i])} of posts` : `${fmtNum(hourVals[i])} ${activityLabel}`, perf ? `${r.byHour.counts[i]} posts` : ''].filter(Boolean),
   });
   renderBars(dayHost, {
-    values: dayVals, labels: DAYS.map((d) => d.slice(0, 3)), yFormat: perf ? (v) => `${+v.toFixed(2)}×` : fmtNum, best: bestDay,
-    reference: perf ? 1 : null, referenceLabel: 'typical',
+    values: dayVals, labels: DAYS.map((d) => d.slice(0, 3)), yFormat: perf ? (v) => `${Math.round(v)}%` : fmtNum, best: bestDay,
+    reference: perf ? 50 : null, referenceLabel: 'typical',
     label: `Bar chart of ${perf ? 'performance' : activityLabel} by day of week`,
-    tipLines: (i) => [DAYS[i], dayVals[i] === null ? 'No data' : perf ? `${fmtLift(dayVals[i])} the typical ${metricNoun}` : `${fmtNum(dayVals[i])} ${activityLabel}`, perf ? `${r.byDay.counts[i]} posts` : ''].filter(Boolean),
+    tipLines: (i) => [DAYS[i], dayVals[i] === null ? 'No data' : perf ? `Beat ${fmtPct(dayVals[i])} of posts` : `${fmtNum(dayVals[i])} ${activityLabel}`, perf ? `${r.byDay.counts[i]} posts` : ''].filter(Boolean),
   });
 
   /* recommendations */
-  const scoreText = (s) => (r.basis === 'performance' ? fmtLift(s) : `${fmtNum(s)} ${activityLabel.replace(' per hour', '/h')}`);
+  const scoreText = (s) => (r.basis === 'performance' ? fmtPct(s) : `${fmtNum(s)} ${activityLabel.replace(' per hour', '/h')}`);
   const perDayMax = Math.max(...r.perDay.filter(Boolean).map((p) => p.score));
   const order = [1, 2, 3, 4, 5, 6, 0]; // Monday first reads like a planner
   const perDayList = h('ol', { class: 'ranked plain' }, order.map((d) => {
@@ -446,7 +447,7 @@ function render({ animate = false } = {}) {
   out.append(h('div', { class: 'grid-2' }, panel('How this was worked out', null,
     h('div', { class: 'notes' },
       h('p', {}, data.method),
-      h('p', {}, 'Each post counts in proportion to how it did against the median post, capped at 5×, so one viral post cannot decide the answer. Hours are smoothed with their neighbours, and hours with few posts are pulled toward the average.'),
+      h('p', {}, 'Each post is ranked against all the others: a post that beat 90% of them scores 90%. An hour’s score is the average for posts published then, so one viral post can only move it so far. Hours are smoothed with their neighbours, and hours with few posts are pulled toward 50%.'),
       h('p', {}, h('a', { href: 'method.html' }, 'Read the full method')),
       data.sourceCredit ? h('p', {}, 'Data: ', h('a', { href: data.sourceCredit.url, target: '_blank', rel: 'noopener noreferrer' }, data.sourceCredit.label), `, read ${new Date().toLocaleString()}.`) : null))));
   [...out.children].forEach((child, i) => child.style.setProperty('--i', i));

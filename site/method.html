@@ -38,7 +38,7 @@
       <table class="data">
         <thead><tr><th scope="col">Platform</th><th scope="col">Source</th><th scope="col">What a post is scored by</th></tr></thead>
         <tbody>
-          <tr><th scope="row">Reddit</th><td><a href="https://github.com/ArthurHeitmann/arctic_shift">Arctic Shift</a> archive, last 28 days</td><td>Comments received in its first day</td></tr>
+          <tr><th scope="row">Reddit</th><td><a href="https://github.com/ArthurHeitmann/arctic_shift">Arctic Shift</a> archive, last 28 days</td><td>Upvotes and comments</td></tr>
           <tr><th scope="row">Bluesky</th><td>Bluesky public API, up to 1,000 posts</td><td>Likes, reposts, replies, quotes</td></tr>
           <tr><th scope="row">Mastodon</th><td>The account's own server, up to 800 posts; or a hashtag timeline</td><td>Favourites, boosts, replies</td></tr>
           <tr><th scope="row">Lemmy</th><td>The community's server, last 90 days</td><td>Score and comments</td></tr>
@@ -46,17 +46,17 @@
           <tr><th scope="row">Anything else</th><td>An analytics export you drop in</td><td>Whichever number columns the file has</td></tr>
         </tbody>
       </table>
-      <p>Why Reddit uses an archive: since 2026, reddit.com refuses requests from signed-out browsers and sends no cross-origin headers, so no static website can read it directly. Arctic Shift records posts and comments seconds after they appear. Upvote counts in it are frozen at that moment, so Tidewatch doesn't use them; it counts the comments each post went on to receive instead. If you want upvotes, save a <code>top.json</code> page while signed in to Reddit and import it.</p>
-      <p>Very busy subreddits write more comments than can be read in one go. For those, Tidewatch takes a short sample every two hours across four weeks and recommends the hours when the community comments most, and says so on the results.</p>
+      <p>Why Reddit uses an archive: since 2026, reddit.com refuses requests from signed-out browsers and sends no cross-origin headers, so no static website can read it directly. Arctic Shift records each post seconds after it appears and reads it again about 36 hours later, updating its upvotes and comment count. Tidewatch only scores posts older than two days, so every score comes from that second reading.</p>
+      <p>Very busy subreddits publish more posts than can be read in one go. For those, Tidewatch reads one page of posts every two hours across four weeks and says so on the results.</p>
       <p>Instagram, TikTok, X, Facebook, LinkedIn, Threads and YouTube don't offer public data a website can read without a server and a login, so for those you bring the export from your own analytics.</p>
 
       <h2>How each hour is scored</h2>
       <ol>
-        <li>Posts younger than 24 hours are left out, because they are still collecting interactions. Reddit's AutoModerator threads are left out too, since they are posted on a schedule.</li>
-        <li>Each post gets a weight: its result divided by the median post's result, capped at 5. One viral post counts the same as any post five times better than usual, so it can't decide the answer alone.</li>
-        <li>Weights and post counts are added up for each of the 168 hours of the week, in the time zone you pick, then smoothed with the neighbouring hours (a quarter from each side), because a post at 4:59 and one at 5:01 are really the same choice.</li>
-        <li>Each hour's score is the average weight of its posts, pulled toward the overall average as if it had three extra average posts. An hour with one lucky post doesn't beat an hour with twenty good ones.</li>
-        <li>Scores are shown against a typical post: 1.5× means posts published then did 50% better than usual.</li>
+        <li>Posts younger than 24 hours (two days on Reddit) are left out, because they are still collecting interactions. Reddit's AutoModerator threads are left out too, since they are posted on a schedule.</li>
+        <li>Each post is ranked against all the others by the metric you pick. A post that beat 90% of them scores 90%; ties share the difference. Ranks are graded, so a huge post counts for more than a decent one, but no post can score above 100%, so one viral post can't decide the answer. They also work the same whether typical posts get 1 like or 10,000, which matters on Reddit, where most posts sit at 1 upvote.</li>
+        <li>Ranks and post counts are added up for each of the 168 hours of the week, in the time zone you pick, then smoothed with the neighbouring hours (a quarter from each side), because a post at 4:59 and one at 5:01 are really the same choice.</li>
+        <li>Each hour's score is the average rank of its posts, pulled toward 50% as if it had three extra average posts. An hour with one lucky post doesn't beat an hour with twenty good ones.</li>
+        <li>A score of 50% is a typical hour. 65% means posts published then beat 65% of the other posts, on average.</li>
       </ol>
       <p>The activity view counts events per hour instead (comments for Reddit, published posts elsewhere), divided by how many times each hour of the week appears in the period read, so a window with two Tuesdays and one Wednesday doesn't make Tuesday look twice as busy.</p>
       <p>When fewer than 15 posts can be scored, the recommendations come from activity instead, and the page says which one it used.</p>
