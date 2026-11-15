@@ -1,0 +1,73 @@
+name: Data pipeline
+
+# Every hour: re-read Bluesky posts sampled two days ago, sample a few minutes of new ones, refresh
+# any Reddit snapshot older than 20 hours, then publish the results and redeploy the site.
+# Data lives on the `data` branch as one orphan commit that is replaced each run, so the
+# repository history doesn't grow with it.
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check out existing data
+        id: data
+        uses: actions/checkout@v7
+        continue-on-error: true
+        with:
+          ref: data
+          path: data
+
+      - name: Start empty data when the branch doesn't exist yet
+        if: steps.data.outcome != 'success'
+        run: rm -rf data && mkdir data
+
+      - name: Bluesky benchmark
+        run: node scripts/bluesky-benchmark.mjs data
+
+      - name: Reddit snapshots
+        run: node scripts/reddit-snapshots.mjs data --budget-minutes 25
+
+      - name: Publish the data branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd data
+          rm -rf .git
+          git init -q -b data
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "Data snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
+
+      # GitHub pauses scheduled workflows in public repositories after 60 days without activity.
+      # Re-enabling the workflow through the API resets that clock.
+      - name: Keep the schedule alive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/pipeline.yml/enable"
+
+  deploy:
+    needs: collect
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

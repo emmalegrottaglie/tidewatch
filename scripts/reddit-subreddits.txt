@@ -1,0 +1,32 @@
+# Subreddits precomputed by scripts/reddit-snapshots.mjs. One per line; # starts a comment.
+# Busy ones are sampled (84 archive requests), smaller ones read in full (about 70 requests).
+AskReddit
+pics
+funny
+gaming
+worldnews
+todayilearned
+aww
+Music
+movies
+science
+Showerthoughts
+mildlyinteresting
+dataisbeautiful
+photography
+analog
+EarthPorn
+food
+DIY
+gadgets
+technology
+programming
+webdev
+Entrepreneur
+smallbusiness
+marketing
+startups
+SideProject
+socialmedia
+books
+Art

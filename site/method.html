@@ -43,11 +43,16 @@
           <tr><th scope="row">Mastodon</th><td>The account's own server, up to 800 posts; or a hashtag timeline</td><td>Favourites, boosts, replies</td></tr>
           <tr><th scope="row">Lemmy</th><td>The community's server, last 90 days</td><td>Score and comments</td></tr>
           <tr><th scope="row">Hacker News</th><td>HN Search by Algolia</td><td>Points and comments</td></tr>
+          <tr><th scope="row">All of Bluesky</th><td>Tidewatch's own hourly sample of new posts, re-read after two days</td><td>Likes, reposts, replies, quotes</td></tr>
           <tr><th scope="row">Anything else</th><td>An analytics export you drop in</td><td>Whichever number columns the file has</td></tr>
         </tbody>
       </table>
       <p>Why Reddit uses an archive: since 2026, reddit.com refuses requests from signed-out browsers and sends no cross-origin headers, so no static website can read it directly. Arctic Shift records each post seconds after it appears and reads it again about 36 hours later, updating its upvotes and comment count. Tidewatch only scores posts older than two days, so every score comes from that second reading.</p>
       <p>Very busy subreddits publish more posts than can be read in one go. For those, Tidewatch reads one page of posts every two hours across four weeks and says so on the results.</p>
+      <p>Popular subreddits are also read once a day by a scheduled job and saved with the site, so they open instantly. The results say when that copy was made and offer to read the subreddit live instead.</p>
+      <h3>The Bluesky benchmark</h3>
+      <p>No public API lists every post on Bluesky with its likes, so Tidewatch measures it. Every hour, a scheduled job listens to Bluesky's public firehose for five minutes, counts every new post that isn't a reply, and keeps a random sample of 100. Two days later it reads those posts again through the public Bluesky API to get their final likes, reposts, replies and quotes. Over a few weeks every hour of the week is sampled on several days, and the last 28 days are kept. Posts are grouped by the first language their author set.</p>
+      <p>It answers a different question from analyzing one account: when posts from everyone tend to do well. Your own audience may keep different hours, so analyze your account too.</p>
       <p>Instagram, TikTok, X, Facebook, LinkedIn, Threads and YouTube don't offer public data a website can read without a server and a login, so for those you bring the export from your own analytics.</p>
 
       <h2>How each hour is scored</h2>

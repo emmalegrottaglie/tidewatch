@@ -4,3 +4,5 @@ node_modules/
 craft-anything-web-*/
 *.log
 .DS_Store
+site/data/
+/data/

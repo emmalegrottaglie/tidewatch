@@ -162,10 +162,13 @@ export function collapse(posts, { timeZone, metric = 'engagement', prior = 3, by
   return { score: sums.map((s, i) => ((s + prior * 0.5) / (counts[i] + prior)) * 100), counts };
 }
 
-/** Activity rate (events per hour) for each weekly slot, from raw timestamps and the intervals they cover. */
-export function activityRate(timestamps, intervals, timeZone) {
+/**
+ * Activity rate (events per hour) for each weekly slot, from raw timestamps and the intervals they
+ * cover. `weights[i]`, when given, is how many events timestamp i stands for (pre-binned counts).
+ */
+export function activityRate(timestamps, intervals, timeZone, weights = null) {
   const counts = new Array(SLOTS).fill(0);
-  for (const t of timestamps) counts[slotOf(t, timeZone)] += 1;
+  timestamps.forEach((t, i) => { counts[slotOf(t, timeZone)] += weights ? weights[i] : 1; });
   const exposure = exposureHours(intervals, timeZone);
   const measured = counts.map((c, i) => (exposure[i] > 0 ? c / exposure[i] : null));
   // A single empty hour between two measured hours (sampled sources read every other hour)
@@ -267,7 +270,7 @@ export function groupBy(posts, keyFn, metric = 'engagement') {
 
 /**
  * Full analysis of a source result.
- * @param {object} data  { posts, activity?: { timestamps, intervals }, perfIntervals?, minAgeHours? }
+ * @param {object} data  { posts, activity?: { timestamps, intervals, weights? }, perfIntervals?, minAgeHours? }
  */
 export function analyze(data, { timeZone, metric = 'engagement', now = Date.now(), minAgeHours = 24 } = {}) {
   const all = (data.posts || []).filter((p) => Number.isFinite(p.createdAt));
@@ -289,9 +292,9 @@ export function analyze(data, { timeZone, metric = 'engagement', now = Date.now(
   }
   let activity = null;
   if (act) {
-    activity = activityRate(act.timestamps, act.intervals, timeZone);
+    activity = activityRate(act.timestamps, act.intervals, timeZone, act.weights);
     activity.label = act.label;
-    activity.total = act.timestamps.length;
+    activity.total = act.weights ? act.weights.reduce((a, b) => a + b, 0) : act.timestamps.length;
   }
   // When there aren't enough scored posts, recommendations come from activity instead.
   const minPosts = 15;

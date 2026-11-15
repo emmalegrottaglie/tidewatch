@@ -162,6 +162,27 @@ async function postPageSpan(params, signal) {
   return { count: probe.length, span: probe.length > 1 ? (probe[0].created_utc - probe[probe.length - 1].created_utc) * 1000 : DAY };
 }
 
+/**
+ * Popular subreddits are precomputed every day by the data pipeline (scripts/reddit-snapshots.mjs)
+ * and served from this site, which spares the archive and the visitor ~70 requests. Returns null
+ * when there is no snapshot or it is more than three days old, and the caller reads live instead.
+ */
+const SNAPSHOT_MAX_AGE = 3 * DAY;
+let snapshotIndex = null;
+async function redditSnapshot(name, signal) {
+  try {
+    snapshotIndex ??= fetch('data/reddit/index.json', { signal }).then((r) => (r.ok ? r.json() : { subs: {} }));
+    const entry = (await snapshotIndex).subs?.[name.toLowerCase()];
+    if (!entry || Date.now() - entry.fetchedAt > SNAPSHOT_MAX_AGE) return null;
+    const res = await fetch(`data/reddit/${name.toLowerCase()}.json`, { signal });
+    return res.ok ? { ...(await res.json()), snapshot: { fetchedAt: entry.fetchedAt } } : null;
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    snapshotIndex = null;
+    return null; // no data folder (local runs, forks without the pipeline): read live
+  }
+}
+
 const reddit = {
   id: 'reddit',
   label: 'Reddit',
@@ -179,7 +200,11 @@ const reddit = {
   normalize: (q) => q.trim().replace(/^https?:\/\/(www\.|old\.)?reddit\.com\//i, '').replace(/^\/?r\//i, '').replace(/\/.*$/, ''),
   validate: (q) => /^[A-Za-z0-9_]{2,21}$/.test(q) || 'Subreddit names are 2-21 letters, numbers or underscores.',
   title: (q) => `r/${q}`,
-  async fetch(name, { signal, onProgress, days = 28 }) {
+  async fetch(name, { signal, onProgress, days = 28, live = false }) {
+    if (!live) {
+      const snapshot = await redditSnapshot(name, signal);
+      if (snapshot) return snapshot;
+    }
     const end = Date.now();
     const start = end - days * DAY;
     const metaBody = await getJSON(`${ARCTIC}/subreddits/search?${new URLSearchParams({ subreddit: name, fields: 'display_name,subscribers,public_description,created_utc' })}`, { signal });
@@ -576,5 +601,66 @@ const lemmy = {
   },
 };
 
-export const SOURCES = { reddit, bluesky, mastodon, hackernews, lemmy };
+/* ------------------------------------------------------ Platform-wide benchmarks */
+// Built by the data pipeline (scripts/bluesky-benchmark.mjs): a random sample of every new
+// top-level Bluesky post, re-read two days later for its settled counts. Rows are
+// [timestampMs, likes, reposts, replies, quotes, languageIndex]; activity rows are
+// [timestampMs, totalPosts, ...postsPerLanguage] counted over the sampled minutes.
+const LANGUAGE_NAMES = { en: 'English', ja: 'Japanese', pt: 'Portuguese', es: 'Spanish', de: 'German', ko: 'Korean', fr: 'French' };
+
+const benchmark = {
+  id: 'benchmark',
+  label: 'All of Bluesky',
+  noun: 'language',
+  prefix: '',
+  placeholder: 'all, or a language code like en',
+  examples: ['all', 'en', 'ja', 'pt', 'es', 'de'],
+  metrics: bluesky.metrics,
+  defaultMetric: 'likes',
+  normalize: (q) => q.trim().toLowerCase().replace(/^bluesky:?/, '') || 'all',
+  validate: (q) => q === 'all' || q in LANGUAGE_NAMES || `Pick all, or one of: ${Object.keys(LANGUAGE_NAMES).join(', ')}.`,
+  title: (q) => (q === 'all' ? 'all of Bluesky' : `${LANGUAGE_NAMES[q]} posts on Bluesky`),
+  async fetch(lang, { signal, onProgress }) {
+    onProgress?.(0.3, 'Loading the Bluesky benchmark');
+    let res;
+    try {
+      res = await fetch('data/bluesky.json', { signal });
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      res = null;
+    }
+    if (!res || !res.ok) throw new SourceError('The Bluesky benchmark isn’t available yet. It is rebuilt every hour by the data pipeline; try again later.');
+    const bench = await res.json();
+    const li = lang === 'all' ? -1 : bench.langs.indexOf(lang);
+    const rows = bench.posts.filter((r) => li === -1 || r[5] === li);
+    const act = bench.activity.filter((r) => (li === -1 ? r[1] : r[2 + li]) > 0);
+    const days = bench.intervals.length ? (Date.now() - bench.intervals[0][0]) / DAY : 0;
+    const sampledHours = bench.intervals.reduce((s, [a, b]) => s + (b - a), 0) / 3600_000;
+    const name = lang === 'all' ? 'Bluesky' : `Bluesky (${LANGUAGE_NAMES[lang]})`;
+    return {
+      profile: {
+        name,
+        url: 'https://bsky.app/',
+        description: `A random sample of new ${lang === 'all' ? '' : `${LANGUAGE_NAMES[lang]} `}top-level posts from across Bluesky, each re-read two days after it went up. Updated every hour.`,
+        stats: [{ label: 'Hours sampled', value: sampledHours.toFixed(1) }],
+      },
+      posts: rows.map(([t, likes, reposts, replies, quotes], i) => ({ id: String(i), createdAt: t, metrics: { likes, reposts, replies, quotes } })),
+      activity: {
+        timestamps: act.map((r) => r[0]),
+        weights: act.map((r) => (li === -1 ? r[1] : r[2 + li])),
+        intervals: bench.intervals,
+        label: 'new posts per hour',
+      },
+      minAgeHours: bench.settleHours,
+      notes: [
+        `Built from ${sampledHours.toFixed(1)} hours of samples over the last ${Math.round(Math.min(days, bench.windowDays))} days, last updated ${new Date(bench.generatedAt).toLocaleString()}.${days < 14 ? ' The benchmark is still filling in, so hours of the week that haven’t been sampled yet are blank.' : ''}`,
+        'This compares posts from everyone, so it mostly reflects when engaged audiences are online, not what would work for one account. Analyze your own account for that.',
+      ],
+      method: 'Every hour, Tidewatch listens to the Bluesky firehose (Jetstream) for five minutes, counts every new top-level post for the activity view, and keeps a random sample of 100. Two days later it re-reads those posts through the public Bluesky API to get their settled likes, reposts, replies and quotes. Posts deleted in the meantime drop out.',
+      sourceCredit: { label: 'Bluesky Jetstream and AppView', url: 'https://github.com/bluesky-social/jetstream' },
+    };
+  },
+};
+
+export const SOURCES = { reddit, bluesky, mastodon, hackernews, lemmy, benchmark };
 export { SourceError };

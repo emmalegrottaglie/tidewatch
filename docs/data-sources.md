@@ -27,7 +27,12 @@ reach sites without CORS, run for hours, and commit results as JSON that the sta
 Scheduled workflows are paused after 60 days without repository activity, so a workflow that
 commits its own output keeps itself alive.
 
-1. **Precomputed popular subreddits.** A nightly job runs the same analysis for the top few
+Items 1 and 2 are built: see `.github/workflows/pipeline.yml` and the README's "Data pipeline"
+section. The job runs hourly so the Bluesky sample covers every hour of the week; it samples five
+minutes per run (about 23 new top-level posts a second were measured in November 2026, so roughly
+7,000 per run) and keeps 100 of them to re-read.
+
+1. **Precomputed popular subreddits.** A daily job runs the same analysis for the top few
    hundred subreddits from Arctic Shift and writes `site/data/reddit/<name>.json`. The page shows
    those instantly and falls back to a live fetch for everything else.
 2. **Platform-wide benchmarks for Bluesky.** Jetstream (`wss://jetstream2.us-east.bsky.network`,
@@ -61,7 +66,8 @@ commits its own output keeps itself alive.
 
 ## Recommended order
 
-1. YouTube with a bring-your-own key (small, browser-only).
-2. Nightly precomputed subreddit snapshots (instant results, less load on Arctic Shift).
-3. Bluesky benchmark pipeline (Jetstream sample + `getPosts` re-read), then Mastodon and HN.
-4. Optional paid connectors only if someone funds the API key.
+1. ~~Daily precomputed subreddit snapshots~~ (done).
+2. ~~Bluesky benchmark pipeline~~ (done).
+3. YouTube with a bring-your-own key (small, browser-only).
+4. Mastodon benchmark from a few large servers' public timelines.
+5. Optional paid connectors only if someone funds the API key.

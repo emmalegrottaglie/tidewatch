@@ -84,7 +84,7 @@ function showError(message) {
   $('error').hidden = false;
 }
 
-async function start(platform, raw) {
+async function start(platform, raw, { live = false } = {}) {
   const source = SOURCES[platform];
   const query = source.normalize(raw);
   const valid = source.validate(query);
@@ -106,7 +106,7 @@ async function start(platform, raw) {
   url.search = new URLSearchParams({ source: platform, q: query }).toString();
   history.replaceState(null, '', url);
   try {
-    const data = await source.fetch(query, { signal: controller.signal, onProgress: (f, t) => setProgress(0.05 + f * 0.9, t) });
+    const data = await source.fetch(query, { signal: controller.signal, live, onProgress: (f, t) => setProgress(0.05 + f * 0.9, t) });
     if (!data.posts.length) throw new SourceError(`${source.title(query)} has no public posts to analyze.`);
     state.data = data;
     state.source = source;
@@ -318,7 +318,12 @@ function render({ animate = false } = {}) {
   if (r.lowSample && r.basis === 'performance') notes.push(`Only ${r.counts.eligible} posts could be scored, so treat these times as a rough guide.`);
   const minAge = data.minAgeHours ?? 24;
   if (minAge > 0 && r.counts.fetched > r.counts.eligible) notes.push(`Posts from the last ${minAge === 24 ? '24 hours' : `${minAge / 24} days`} are still collecting interactions, so they are left out of the scores.`);
-  if (notes.length) verdict.append(h('div', { class: 'notes' }, notes.map((n) => h('p', {}, n))));
+  const noteNodes = notes.map((n) => h('p', {}, n));
+  if (data.snapshot) {
+    noteNodes.unshift(h('p', {}, `Read from the archive on ${new Date(data.snapshot.fetchedAt).toLocaleString()} by the daily update. `,
+      h('button', { type: 'button', class: 'link-button', onclick: () => start(state.source.id, state.query, { live: true }) }, 'Read it live instead')));
+  }
+  if (noteNodes.length) verdict.append(h('div', { class: 'notes' }, noteNodes));
   out.append(verdict);
 
   /* heatmap */
@@ -435,9 +440,11 @@ function render({ animate = false } = {}) {
     p.querySelector('.panel-head').append(seg);
     lower.push(p);
   }
-  if (r.topPosts.length) {
+  // Benchmark posts are anonymous samples with no link or text, so they get no list.
+  const linkedTop = r.topPosts.filter((p) => p.url);
+  if (linkedTop.length) {
     lower.push(panel(`Top posts on ${name}`, `Highest ${metricLabel.toLowerCase()} among the posts scored.`,
-      h('ol', { class: 'posts' }, r.topPosts.map((p) => h('li', {},
+      h('ol', { class: 'posts' }, linkedTop.map((p) => h('li', {},
         h('a', { href: p.url, target: '_blank', rel: 'noopener noreferrer' }, (p.title || p.text || '(no text)').slice(0, 160)),
         h('span', { class: 'meta' }, `${new Date(p.createdAt).toLocaleString(undefined, { timeZone: state.timeZone, weekday: 'short', month: 'short', day: 'numeric', year: new Date(p.createdAt).getFullYear() === new Date().getFullYear() ? undefined : 'numeric', hour: 'numeric', minute: '2-digit' })}${p.domain ? `, ${p.domain}` : ''}`),
         h('span', { class: 'num' }, fmtCount(metricValue(p, state.metric)), h('small', {}, metricLabel.toLowerCase())))))));
@@ -450,7 +457,7 @@ function render({ animate = false } = {}) {
       h('p', {}, data.method),
       h('p', {}, 'Each post is ranked against all the others: a post that beat 90% of them scores 90%. An hour’s score is the average for posts published then, so one viral post can only move it so far. Hours are smoothed with their neighbours, and hours with few posts are pulled toward 50%.'),
       h('p', {}, h('a', { href: 'method.html' }, 'Read the full method')),
-      data.sourceCredit ? h('p', {}, 'Data: ', h('a', { href: data.sourceCredit.url, target: '_blank', rel: 'noopener noreferrer' }, data.sourceCredit.label), `, read ${new Date().toLocaleString()}.`) : null))));
+      data.sourceCredit ? h('p', {}, 'Data: ', h('a', { href: data.sourceCredit.url, target: '_blank', rel: 'noopener noreferrer' }, data.sourceCredit.label), `, read ${new Date(data.snapshot?.fetchedAt ?? Date.now()).toLocaleString()}.`) : null))));
   [...out.children].forEach((child, i) => child.style.setProperty('--i', i));
   perDayList.querySelectorAll('.meter i').forEach((m, i) => m.style.setProperty('--i', i));
 }
