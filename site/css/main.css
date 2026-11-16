@@ -206,7 +206,7 @@ select, .input {
 .panel-head p { color: var(--ink-3); font-size: 0.93rem; flex-basis: 100%; }
 .panel-foot { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; justify-content: space-between; color: var(--ink-3); font-size: 0.88rem; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 20px; margin-top: 20px; }
-.stack { display: grid; gap: 20px; }
+.stack { display: grid; gap: 20px; align-content: start; min-width: 0; }
 details.table-view summary { cursor: pointer; color: var(--link); font-size: 0.9rem; }
 details.table-view[open] { flex-basis: 100%; }
 details.table-view .table-scroll { margin-top: 10px; max-width: 100%; overflow-x: auto; }

@@ -484,15 +484,18 @@ function render({ animate = false } = {}) {
         h('span', { class: 'meta' }, `${new Date(p.createdAt).toLocaleString(undefined, { timeZone: state.timeZone, weekday: 'short', month: 'short', day: 'numeric', year: new Date(p.createdAt).getFullYear() === new Date().getFullYear() ? undefined : 'numeric', hour: 'numeric', minute: '2-digit' })}${p.domain ? `, ${p.domain}` : ''}`),
         h('span', { class: 'num' }, fmtCount(metricValue(p, state.metric)), h('small', {}, metricLabel.toLowerCase())))))));
   }
-  if (lower.length) out.append(h('div', { class: 'grid-2' }, lower));
-
-  /* method (last section) */
-  out.append(h('div', { class: 'grid-2' }, panel('How this was worked out', null,
+  /* method: closes the page, under the phrases so the short panels share a column beside the long top-posts list */
+  const methodPanel = panel('How this was worked out', null,
     h('div', { class: 'notes' },
       h('p', {}, data.method),
       h('p', {}, 'The best-time score blends two things: when the audience is active, and how well posts published at each hour did. Each post is ranked against the others (a post that beat 90% of them scores 90%), and each hour borrows from the same hour on other days, so one viral post can only move it so far. How posts did only counts when posts from different days agree on which hours win; otherwise the score follows the audience.'),
       h('p', {}, h('a', { href: 'method.html' }, 'Read the full method')),
-      data.sourceCredit ? h('p', {}, 'Data: ', h('a', { href: data.sourceCredit.url, target: '_blank', rel: 'noopener noreferrer' }, data.sourceCredit.label), `, read ${new Date(data.snapshot?.fetchedAt ?? Date.now()).toLocaleString()}.`) : null))));
+      data.sourceCredit ? h('p', {}, 'Data: ', h('a', { href: data.sourceCredit.url, target: '_blank', rel: 'noopener noreferrer' }, data.sourceCredit.label), `, read ${new Date(data.snapshot?.fetchedAt ?? Date.now()).toLocaleString()}.`) : null));
+  const phrasePanel = phraseSizes.length ? lower.shift() : null;
+  const topPanel = lower[0];
+  out.append(topPanel
+    ? h('div', { class: 'grid-2' }, h('div', { class: 'stack' }, phrasePanel, methodPanel), topPanel)
+    : h('div', { class: 'grid-2' }, phrasePanel, methodPanel));
   [...out.children].forEach((child, i) => child.style.setProperty('--i', i));
   perDayList.querySelectorAll('.meter i').forEach((m, i) => m.style.setProperty('--i', i));
 }
