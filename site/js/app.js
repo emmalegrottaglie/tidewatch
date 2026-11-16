@@ -354,14 +354,14 @@ function render({ animate = false } = {}) {
   let heatDesc;
   if (bestMode) {
     heatDesc = r.best.audience && perfCounts
-      ? `Darker hours are better times to post: they combine when ${name}'s audience is active with how well posts published then did.`
+      ? `Stronger blue hours are better times to post: they combine when ${name}'s audience is active with how well posts published then did.`
       : r.best.audience
-        ? `Darker hours are when ${name}'s audience is most active, so a new post is seen by the most people.`
-        : `Darker hours are when ${name}'s posts did best compared with its other posts.`;
+        ? `Stronger blue hours are when ${name}'s audience is most active, so a new post is seen by the most people.`
+        : `Stronger blue hours are when ${name}'s posts did best compared with its other posts.`;
   } else if (perf) {
     heatDesc = `How posts published in each hour ranked on ${metricNoun}: the share of other posts they beat, on average. Blue hours beat the typical 50%, pink hours fall short.`;
   } else {
-    heatDesc = `How many ${activityLabel.replace(' per hour', '')} appear in each hour of the week. Darker is busier.`;
+    heatDesc = `How many ${activityLabel.replace(' per hour', '')} appear in each hour of the week. Stronger blue is busier.`;
   }
   const fmtCell = (v) => (bestMode ? String(Math.round(v)) : perf ? fmtPct(v) : fmtNum(v));
   const heatPanel = panel(`Best times to post on ${name}`, heatDesc, heatHost,
