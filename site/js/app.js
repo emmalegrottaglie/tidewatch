@@ -334,8 +334,11 @@ function render({ animate = false } = {}) {
   if (minAge > 0 && r.counts.fetched > r.counts.eligible) notes.push(`Posts from the last ${minAge === 24 ? '24 hours' : `${minAge / 24} days`} are still collecting interactions, so they are left out of the scores.`);
   const noteNodes = notes.map((n) => h('p', {}, n));
   if (data.snapshot) {
-    noteNodes.unshift(h('p', {}, `Read from the archive on ${new Date(data.snapshot.fetchedAt).toLocaleString()} by the daily update. `,
-      h('button', { type: 'button', class: 'link-button', onclick: () => start(state.source.id, state.query, { live: true }) }, 'Read it live instead')));
+    const when = new Date(data.snapshot.fetchedAt).toLocaleString();
+    noteNodes.unshift(h('p', {}, data.snapshot.kind === 'browser'
+      ? `Shown from your earlier read on ${when}, saved in this browser for 12 hours. `
+      : `Read from the archive on ${when} by the daily update. `,
+      h('button', { type: 'button', class: 'link-button', onclick: () => start(state.source.id, state.query, { live: true }) }, 'Read it again now')));
   }
   if (noteNodes.length) verdict.append(h('div', { class: 'notes' }, noteNodes));
   out.append(verdict);

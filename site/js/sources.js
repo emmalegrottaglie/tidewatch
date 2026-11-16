@@ -175,12 +175,56 @@ async function redditSnapshot(name, signal) {
     const entry = (await snapshotIndex).subs?.[name.toLowerCase()];
     if (!entry || Date.now() - entry.fetchedAt > SNAPSHOT_MAX_AGE) return null;
     const res = await fetch(`data/reddit/${name.toLowerCase()}.json`, { signal });
-    return res.ok ? { ...(await res.json()), audience: true, snapshot: { fetchedAt: entry.fetchedAt } } : null;
+    return res.ok ? { ...(await res.json()), audience: true, snapshot: { fetchedAt: entry.fetchedAt, kind: 'daily' } } : null;
   } catch (e) {
     if (e.name === 'AbortError') throw e;
     snapshotIndex = null;
     return null; // no data folder (local runs, forks without the pipeline): read live
   }
+}
+
+/**
+ * Subreddits outside the daily snapshots are read live, which takes a while, so each live read is
+ * kept in this browser (IndexedDB) for 12 hours and opening the same subreddit again is instant.
+ * Storage can be missing or blocked (private windows, Node in the pipeline); then nothing is kept.
+ */
+const BROWSER_CACHE_MAX_AGE = 12 * 3600_000;
+function withReadStore(mode, use) {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') { resolve(null); return; }
+    const open = indexedDB.open('tidewatch', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('reads');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('reads', mode);
+      const req = use(tx.objectStore('reads'));
+      tx.oncomplete = () => { db.close(); resolve(req?.result ?? null); };
+      tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+    };
+  });
+}
+async function browserCachedRead(key) {
+  try {
+    const entry = await withReadStore('readonly', (store) => store.get(key));
+    return entry && Date.now() - entry.fetchedAt < BROWSER_CACHE_MAX_AGE
+      ? { ...entry.data, snapshot: { fetchedAt: entry.fetchedAt, kind: 'browser' } }
+      : null;
+  } catch { return null; }
+}
+async function browserSaveRead(key, data) {
+  try {
+    await withReadStore('readwrite', (store) => {
+      // Drop expired reads so the store doesn't grow with every subreddit ever opened.
+      store.openCursor().onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (!cursor) return;
+        if (Date.now() - cursor.value.fetchedAt >= BROWSER_CACHE_MAX_AGE) cursor.delete();
+        cursor.continue();
+      };
+      return store.put({ fetchedAt: Date.now(), data }, key);
+    });
+  } catch { /* storage full or blocked: the read still shows, it just isn't kept */ }
 }
 
 /** Posts to aim for when choosing how far back to read (the full read caps at 2,000). */
@@ -204,93 +248,100 @@ const reddit = {
   validate: (q) => /^[A-Za-z0-9_]{2,21}$/.test(q) || 'Subreddit names are 2-21 letters, numbers or underscores.',
   title: (q) => `r/${q}`,
   async fetch(name, { signal, onProgress, live = false }) {
+    const cacheKey = `reddit:${name.toLowerCase()}`;
     if (!live) {
-      const snapshot = await redditSnapshot(name, signal);
+      const snapshot = await redditSnapshot(name, signal) ?? await browserCachedRead(cacheKey);
       if (snapshot) return snapshot;
     }
-    const end = Date.now();
-    const metaBody = await getJSON(`${ARCTIC}/subreddits/search?${new URLSearchParams({ subreddit: name, fields: 'display_name,subscribers,public_description,created_utc' })}`, { signal });
-    const meta = (metaBody.data || []).find((d) => d.display_name.toLowerCase() === name.toLowerCase());
-    if (!meta) throw new SourceError(`No subreddit called r/${name} in the archive. Check the spelling.`);
-
-    const sub = meta.display_name;
-    const postParams = { subreddit: sub, limit: '100', fields: 'id,created_utc,title,url,link_flair_text,author,over_18,score,num_comments' };
-    const commentParams = { subreddit: sub, limit: 'auto', fields: 'created_utc' };
-    // Many short comment lanes spread the reads over the whole window, so every weekday and hour
-    // gets sampled several times instead of a few long stretches.
-    const postLanes = 4, postPagesPerLane = 5, commentLanes = 12, commentPagesPerLane = 4, samples = 84;
-    // Busy subreddits publish more posts than we can afford to read over four weeks, so they
-    // get a spread-out sample instead: one page every two hours, rotated across the weeks.
-    const probe = await postPageSpan(postParams, signal);
-    // Quieter subreddits are read further back, up to 90 days, so each hour of the week has
-    // enough posts to compare; busy ones stay at 28 days to keep the results recent.
-    const perDay = probe.count >= 100 ? (probe.count / Math.max(probe.span, 3600_000)) * DAY : 0;
-    const days = perDay ? Math.min(90, Math.max(28, Math.round(REDDIT_TARGET_POSTS / perDay))) : 90;
-    const start = end - days * DAY;
-    const sampled = probe.count >= 50 && probe.span * postLanes * postPagesPerLane < (end - start) * 0.6;
-
-    let pages = 0;
-    const totalPages = sampled ? samples : postLanes * postPagesPerLane + commentLanes * commentPagesPerLane;
-    const tick = () => onProgress?.(++pages / totalPages, `Reading r/${sub} from the archive`);
-    // One endpoint at a time keeps us to three requests in flight, which the archive tolerates.
-    const postsRes = sampled
-      ? await samplePages({ path: '/posts/search', params: postParams, end: end - REDDIT_SETTLED_HOURS * 3600_000, samples, signal, onPage: tick })
-      : await fetchLanes({ path: '/posts/search', params: postParams, start, end, lanes: postLanes, pagesPerLane: postPagesPerLane, signal, onPage: tick });
-    // For subreddits small enough to read in full, comments show when people are around.
-    const commentsRes = sampled ? null
-      : await fetchLanes({ path: '/comments/search', params: commentParams, start, end, lanes: commentLanes, pagesPerLane: commentPagesPerLane, signal, onPage: tick });
-
-    const seen = new Set();
-    const posts = [];
-    for (const p of postsRes.items) {
-      if (seen.has(p.id)) continue;
-      seen.add(p.id);
-      const isSelf = !p.url || /reddit\.com\/r\/[^/]+\/comments\//.test(p.url);
-      const host = isSelf ? 'Text post' : hostOf(p.url);
-      posts.push({
-        id: p.id,
-        createdAt: p.created_utc * 1000,
-        metrics: { upvotes: Math.max(0, p.score || 0), comments: p.num_comments || 0 },
-        title: p.title,
-        url: `https://www.reddit.com/r/${sub}/comments/${p.id}/`,
-        domain: host === 'i.redd.it' || host === 'v.redd.it' || host === 'reddit.com' ? (host === 'v.redd.it' ? 'Reddit video' : host === 'i.redd.it' ? 'Reddit image' : 'Reddit gallery') : host,
-        tags: p.link_flair_text ? [p.link_flair_text] : [],
-        author: p.author,
-        // Scheduled AutoModerator threads would teach us when the mods post, not when people engage.
-        excludeFromPerformance: p.author === 'AutoModerator',
-      });
-    }
-    const covered = (list) => list.reduce((s, [a, b]) => s + (b - a), 0);
-    const notes = [];
-    let activity;
-    if (sampled) {
-      notes.push(`r/${sub} posts too often to read four weeks in full, so these results come from ${postsRes.intervals.length} short samples taken every two hours across four weeks (${posts.length.toLocaleString()} posts).`);
-      activity = { timestamps: posts.map((p) => p.createdAt), intervals: postsRes.intervals, label: 'posts per hour' };
-    } else {
-      const commentDays = covered(commentsRes.intervals) / DAY;
-      if (commentDays < days * 0.9) notes.push(`The comment activity view covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} of the last ${days}, because r/${sub} gets more comments than can be read in one go. Hours outside it are left blank there.`);
-      activity = { timestamps: commentsRes.items.map((c) => c.created_utc * 1000), intervals: commentsRes.intervals, label: 'comments per hour' };
-    }
-    return {
-      profile: {
-        name: `r/${sub}`,
-        url: `https://www.reddit.com/r/${sub}/`,
-        description: meta.public_description,
-        stats: [
-          { label: 'Members', value: formatCount(meta.subscribers) },
-          { label: 'Created', value: new Date(meta.created_utc * 1000).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) },
-        ],
-      },
-      posts,
-      minAgeHours: REDDIT_SETTLED_HOURS,
-      activity,
-      audience: true,
-      notes,
-      method: 'Each post is scored by its upvotes and comments as the archive recorded them on its second visit, about 36 hours after posting. Posts younger than two days are left out because they haven’t been re-read yet.',
-      sourceCredit: { label: 'Arctic Shift archive', url: 'https://github.com/ArthurHeitmann/arctic_shift' },
-    };
+    const result = await readSubreddit(name, { signal, onProgress });
+    await browserSaveRead(cacheKey, result);
+    return result;
   },
 };
+
+async function readSubreddit(name, { signal, onProgress }) {
+  const end = Date.now();
+  const metaBody = await getJSON(`${ARCTIC}/subreddits/search?${new URLSearchParams({ subreddit: name, fields: 'display_name,subscribers,public_description,created_utc' })}`, { signal });
+  const meta = (metaBody.data || []).find((d) => d.display_name.toLowerCase() === name.toLowerCase());
+  if (!meta) throw new SourceError(`No subreddit called r/${name} in the archive. Check the spelling.`);
+
+  const sub = meta.display_name;
+  const postParams = { subreddit: sub, limit: '100', fields: 'id,created_utc,title,url,link_flair_text,author,over_18,score,num_comments' };
+  const commentParams = { subreddit: sub, limit: 'auto', fields: 'created_utc' };
+  // Many short comment lanes spread the reads over the whole window, so every weekday and hour
+  // gets sampled several times instead of a few long stretches.
+  const postLanes = 4, postPagesPerLane = 5, commentLanes = 12, commentPagesPerLane = 4, samples = 84;
+  // Busy subreddits publish more posts than we can afford to read over four weeks, so they
+  // get a spread-out sample instead: one page every two hours, rotated across the weeks.
+  const probe = await postPageSpan(postParams, signal);
+  // Quieter subreddits are read further back, up to 90 days, so each hour of the week has
+  // enough posts to compare; busy ones stay at 28 days to keep the results recent.
+  const perDay = probe.count >= 100 ? (probe.count / Math.max(probe.span, 3600_000)) * DAY : 0;
+  const days = perDay ? Math.min(90, Math.max(28, Math.round(REDDIT_TARGET_POSTS / perDay))) : 90;
+  const start = end - days * DAY;
+  const sampled = probe.count >= 50 && probe.span * postLanes * postPagesPerLane < (end - start) * 0.6;
+
+  let pages = 0;
+  const totalPages = sampled ? samples : postLanes * postPagesPerLane + commentLanes * commentPagesPerLane;
+  const tick = () => onProgress?.(++pages / totalPages, `Reading r/${sub} from the archive`);
+  // One endpoint at a time keeps us to three requests in flight, which the archive tolerates.
+  const postsRes = sampled
+    ? await samplePages({ path: '/posts/search', params: postParams, end: end - REDDIT_SETTLED_HOURS * 3600_000, samples, signal, onPage: tick })
+    : await fetchLanes({ path: '/posts/search', params: postParams, start, end, lanes: postLanes, pagesPerLane: postPagesPerLane, signal, onPage: tick });
+  // For subreddits small enough to read in full, comments show when people are around.
+  const commentsRes = sampled ? null
+    : await fetchLanes({ path: '/comments/search', params: commentParams, start, end, lanes: commentLanes, pagesPerLane: commentPagesPerLane, signal, onPage: tick });
+
+  const seen = new Set();
+  const posts = [];
+  for (const p of postsRes.items) {
+    if (seen.has(p.id)) continue;
+    seen.add(p.id);
+    const isSelf = !p.url || /reddit\.com\/r\/[^/]+\/comments\//.test(p.url);
+    const host = isSelf ? 'Text post' : hostOf(p.url);
+    posts.push({
+      id: p.id,
+      createdAt: p.created_utc * 1000,
+      metrics: { upvotes: Math.max(0, p.score || 0), comments: p.num_comments || 0 },
+      title: p.title,
+      url: `https://www.reddit.com/r/${sub}/comments/${p.id}/`,
+      domain: host === 'i.redd.it' || host === 'v.redd.it' || host === 'reddit.com' ? (host === 'v.redd.it' ? 'Reddit video' : host === 'i.redd.it' ? 'Reddit image' : 'Reddit gallery') : host,
+      tags: p.link_flair_text ? [p.link_flair_text] : [],
+      author: p.author,
+      // Scheduled AutoModerator threads would teach us when the mods post, not when people engage.
+      excludeFromPerformance: p.author === 'AutoModerator',
+    });
+  }
+  const covered = (list) => list.reduce((s, [a, b]) => s + (b - a), 0);
+  const notes = [];
+  let activity;
+  if (sampled) {
+    notes.push(`r/${sub} posts too often to read four weeks in full, so these results come from ${postsRes.intervals.length} short samples taken every two hours across four weeks (${posts.length.toLocaleString()} posts).`);
+    activity = { timestamps: posts.map((p) => p.createdAt), intervals: postsRes.intervals, label: 'posts per hour' };
+  } else {
+    const commentDays = covered(commentsRes.intervals) / DAY;
+    if (commentDays < days * 0.9) notes.push(`The comment activity view covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} of the last ${days}, because r/${sub} gets more comments than can be read in one go. Hours outside it are left blank there.`);
+    activity = { timestamps: commentsRes.items.map((c) => c.created_utc * 1000), intervals: commentsRes.intervals, label: 'comments per hour' };
+  }
+  return {
+    profile: {
+      name: `r/${sub}`,
+      url: `https://www.reddit.com/r/${sub}/`,
+      description: meta.public_description,
+      stats: [
+        { label: 'Members', value: formatCount(meta.subscribers) },
+        { label: 'Created', value: new Date(meta.created_utc * 1000).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) },
+      ],
+    },
+    posts,
+    minAgeHours: REDDIT_SETTLED_HOURS,
+    activity,
+    audience: true,
+    notes,
+    method: 'Each post is scored by its upvotes and comments as the archive recorded them on its second visit, about 36 hours after posting. Posts younger than two days are left out because they haven’t been re-read yet.',
+    sourceCredit: { label: 'Arctic Shift archive', url: 'https://github.com/ArthurHeitmann/arctic_shift' },
+  };
+}
 
 /* ----------------------------------------------------------------- Bluesky */
 const BSKY = 'https://public.api.bsky.app/xrpc';
