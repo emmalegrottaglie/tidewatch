@@ -25,8 +25,9 @@ async function getJSON(url, { signal, retries = 2 } = {}) {
     let body = null;
     try { body = await res.json(); } catch { /* non-JSON error page */ }
     // Arctic Shift reports overload as an error body ("Timeout. Maybe slow down a bit"); back off and retry.
+    // The jitter keeps parallel requests from retrying in lockstep and hitting the archive together again.
     if (body && typeof body.error === 'string' && /timeout|slow down/i.test(body.error) && attempt < retries + 2) {
-      await sleep(1500 * (attempt + 1), signal);
+      await sleep(1500 * (attempt + 1) + Math.random() * 1500, signal);
       continue;
     }
     if (!res.ok || (body && body.data === null && body.error)) {
@@ -85,11 +86,16 @@ const REDDIT_SETTLED_HOURS = 48;
  * The window is split into `lanes` equal slices; each lane pages back from its
  * slice end until it reaches the slice start or runs out of pages. Returns the
  * items and the time intervals that were fetched completely.
+ *
+ * When the archive is overloaded a page can keep failing after its retries. That
+ * ends only its own lane: the pages read so far are kept and the interval stops
+ * where the lane stopped. The read fails only when every lane failed outright.
  */
 async function fetchLanes({ path, params, start, end, lanes, pagesPerLane, signal, onPage }) {
   const span = (end - start) / lanes;
   const intervals = [];
   const items = [];
+  const errors = [];
   const jobs = Array.from({ length: lanes }, (_, i) => async () => {
     const laneStart = start + i * span;
     const laneEnd = start + (i + 1) * span;
@@ -97,7 +103,15 @@ async function fetchLanes({ path, params, start, end, lanes, pagesPerLane, signa
     let reachedStart = false;
     for (let page = 0; page < pagesPerLane; page++) {
       const q = new URLSearchParams({ ...params, before: String(Math.floor(before / 1000)), after: String(Math.floor(laneStart / 1000)), sort: 'desc' });
-      const body = await getJSON(`${ARCTIC}${path}?${q}`, { signal });
+      let body;
+      try {
+        body = await getJSON(`${ARCTIC}${path}?${q}`, { signal });
+      } catch (e) {
+        if (e.name === 'AbortError' || !(e instanceof SourceError)) throw e;
+        errors.push(e);
+        onPage?.(pagesPerLane - page); // count the lane's remaining pages so progress still reaches the end
+        break;
+      }
       const data = body.data || [];
       onPage?.();
       if (!data.length) { reachedStart = true; break; }
@@ -107,10 +121,11 @@ async function fetchLanes({ path, params, start, end, lanes, pagesPerLane, signa
       before = oldest;
       if (before <= laneStart) { reachedStart = true; break; }
     }
-    intervals.push([reachedStart ? laneStart : before, laneEnd]);
+    if (before < laneEnd || reachedStart) intervals.push([reachedStart ? laneStart : before, laneEnd]);
   });
   await pool(jobs, 3);
-  return { items, intervals: mergeIntervals(intervals) };
+  if (!items.length && errors.length) throw errors[0];
+  return { items, intervals: mergeIntervals(intervals), failedPages: errors.length };
 }
 
 /**
@@ -122,18 +137,29 @@ async function fetchLanes({ path, params, start, end, lanes, pagesPerLane, signa
 async function samplePages({ path, params, end, samples, signal, onPage }) {
   const items = [];
   const intervals = [];
+  const errors = [];
   const hourAligned = Math.floor(end / 3600_000) * 3600_000;
   const jobs = Array.from({ length: samples }, (_, i) => async () => {
     const t = hourAligned - i * 2 * 3600_000 - (i % 4) * 7 * DAY + 50 * 60_000; // 50 minutes into the hour
     const q = new URLSearchParams({ ...params, before: String(Math.floor(t / 1000)), sort: 'desc' });
-    const data = (await getJSON(`${ARCTIC}${path}?${q}`, { signal })).data || [];
+    let data;
+    try {
+      data = (await getJSON(`${ARCTIC}${path}?${q}`, { signal })).data || [];
+    } catch (e) {
+      // A sample the overloaded archive won't answer is left out, like an hour with no posts.
+      if (e.name === 'AbortError' || !(e instanceof SourceError)) throw e;
+      errors.push(e);
+      onPage?.();
+      return;
+    }
     onPage?.();
     if (data.length < 2) return;
     for (const d of data) items.push(d);
     intervals.push([Math.min(...data.map((d) => d.created_utc)) * 1000, t]);
   });
   await pool(jobs, 3);
-  return { items, intervals: mergeIntervals(intervals), sampled: true };
+  if (!items.length && errors.length) throw errors[0];
+  return { items, intervals: mergeIntervals(intervals), sampled: true, failedPages: errors.length };
 }
 
 function mergeIntervals(list) {
@@ -283,7 +309,7 @@ async function readSubreddit(name, { signal, onProgress }) {
 
   let pages = 0;
   const totalPages = sampled ? samples : postLanes * postPagesPerLane + commentLanes * commentPagesPerLane;
-  const tick = () => onProgress?.(++pages / totalPages, `Reading r/${sub} from the archive`);
+  const tick = (n = 1) => onProgress?.(Math.min(1, (pages += n) / totalPages), `Reading r/${sub} from the archive`);
   // One endpoint at a time keeps us to three requests in flight, which the archive tolerates.
   const postsRes = sampled
     ? await samplePages({ path: '/posts/search', params: postParams, end: end - REDDIT_SETTLED_HOURS * 3600_000, samples, signal, onPage: tick })
@@ -312,6 +338,7 @@ async function readSubreddit(name, { signal, onProgress }) {
       excludeFromPerformance: p.author === 'AutoModerator',
     });
   }
+  if (postsRes.failedPages) notes.push(`The archive was too busy to answer ${postsRes.failedPages} request${postsRes.failedPages === 1 ? '' : 's'} for posts, so some stretches of time are missing. Reading it again later may fill them in.`);
   const covered = (list) => list.reduce((s, [a, b]) => s + (b - a), 0);
   const notes = [];
   let activity;
@@ -320,7 +347,8 @@ async function readSubreddit(name, { signal, onProgress }) {
     activity = { timestamps: posts.map((p) => p.createdAt), intervals: postsRes.intervals, label: 'posts per hour' };
   } else {
     const commentDays = covered(commentsRes.intervals) / DAY;
-    if (commentDays < days * 0.9) notes.push(`The comment activity view covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} of the last ${days}, because r/${sub} gets more comments than can be read in one go. Hours outside it are left blank there.`);
+    const why = commentsRes.failedPages ? 'because the archive was too busy to answer every request' : `because r/${sub} gets more comments than can be read in one go`;
+    if (commentDays < days * 0.9) notes.push(`The comment activity view covers ${commentDays < 1 ? `${Math.round(commentDays * 24)} hours` : `${commentDays.toFixed(1)} days`} of the last ${days}, ${why}. Hours outside it are left blank there.`);
     activity = { timestamps: commentsRes.items.map((c) => c.created_utc * 1000), intervals: commentsRes.intervals, label: 'comments per hour' };
   }
   return {
