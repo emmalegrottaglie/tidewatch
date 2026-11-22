@@ -256,10 +256,14 @@ export function renderArea(container, { values, xLabel, yFormat, tipLines, refer
   container.replaceChildren(svg);
 }
 
-/** Vertical bars, one per category, with a per-bar tooltip and the best bar emphasized. */
-export function renderBars(container, { values, labels, yFormat, tipLines, best = -1, reference = null, referenceLabel = '', label }) {
+/**
+ * Vertical bars, one per category, with a per-bar tooltip and the best bar emphasized.
+ * rotateLabels: for long category names (flair, sites), labels are slanted and shortened; the
+ * tooltip and the table beside the chart carry the full name. soft: tinted fill with a solid outline.
+ */
+export function renderBars(container, { values, labels, yFormat, tipLines, best = -1, reference = null, referenceLabel = '', label, rotateLabels = false, soft = false }) {
   const n = values.length;
-  const W = chartWidth(container), H = 240, m = { t: 22, r: 12, b: 28, l: 44 };
+  const W = chartWidth(container), H = rotateLabels ? 300 : 240, m = { t: 22, r: 12, b: rotateLabels ? 88 : 28, l: 44 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const nums = values.filter((v) => v !== null);
   const ticks = niceTicks(Math.max(...nums, reference ?? 0, 0.0001));
@@ -277,15 +281,21 @@ export function renderBars(container, { values, labels, yFormat, tipLines, best 
   }
   values.forEach((v, i) => {
     const cx = m.l + band * i + band / 2;
-    const tx = el('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }, ax);
-    tx.textContent = labels[i];
+    if (rotateLabels) {
+      const ly = m.t + ih + 14;
+      const tx = el('text', { x: cx, y: ly, 'text-anchor': 'end', transform: `rotate(-40 ${cx} ${ly})` }, ax);
+      tx.textContent = labels[i].length > 14 ? `${labels[i].slice(0, 13).trimEnd()}…` : labels[i];
+    } else {
+      const tx = el('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }, ax);
+      tx.textContent = labels[i];
+    }
     if (v === null) return;
     const top = y(v), h = Math.max(0, y(0) - top);
     // Rounded top, square base: path with 4px radius on the data end only.
     const r = Math.min(4, h, bw / 2);
     const x0 = cx - bw / 2, x1 = cx + bw / 2, base = y(0);
     const d = `M${x0},${base}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x1 - r}Q${x1},${top} ${x1},${top + r}V${base}Z`;
-    el('path', { class: `bar${i === best ? ' best' : ''}`, d, style: `--i:${i}` }, svg);
+    el('path', { class: `bar${soft ? ' soft' : ''}${i === best ? ' best' : ''}`, d, style: `--i:${i}` }, svg);
     if (i === best) {
       const vl = el('text', { class: 'value-label', x: cx, y: top - 6, 'text-anchor': 'middle' }, svg);
       vl.textContent = yFormat(v);

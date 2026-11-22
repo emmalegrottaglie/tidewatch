@@ -459,7 +459,8 @@ function render({ animate = false } = {}) {
   const groupPanels = [];
   if (r.sites.length) groupPanels.push(groupTable(`Most shared sites on ${name}`, `Where posts link to, by share of posts and average ${metricLabel.toLowerCase()}.`, 'Site', r.sites, metricLabel));
   if (r.tags.length) groupPanels.push(groupTable(`Most popular ${tagNoun} on ${name}`, `The ${tagNoun} posts use most, by share of posts and average ${metricLabel.toLowerCase()}.`, capitalize(tagNoun.replace(/s$/, '')), r.tags, metricLabel));
-  if (groupPanels.length) out.append(h('div', { class: 'grid-2' }, groupPanels));
+  if (groupPanels.length) out.append(h('div', { class: 'grid-2' }, groupPanels.map((g) => g.panel)));
+  for (const g of groupPanels) g.drawChart();
 
   /* phrases + top posts */
   const lower = [];
@@ -533,7 +534,18 @@ function groupTable(title, desc, colName, rows, metricLabel) {
     h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, colName), h('th', { scope: 'col', class: 'num' }, shareBtn), h('th', { scope: 'col', class: 'num' }, avgBtn))),
     body);
   draw();
-  return panel(title, desc, table, rows.length > pageSize ? pager : null);
+  // Averages from one or two posts swing on a single viral post, so the chart compares only
+  // categories with at least three posts; the table below still lists every one.
+  const charted = rows.filter((g) => g.n >= 3).sort((a, b) => b.avg - a.avg).slice(0, 10);
+  const chartHost = charted.length >= 2 ? h('div', { class: 'chart group-chart' }) : null;
+  const drawChart = () => chartHost && renderBars(chartHost, {
+    values: charted.map((g) => g.avg), labels: charted.map((g) => g.name), yFormat: fmtCount, best: 0,
+    rotateLabels: true, soft: true,
+    label: `Bar chart of average ${metricLabel.toLowerCase()} by ${colName.toLowerCase()}, highest first`,
+    tipLines: (i) => [charted[i].name, `${fmtCount(charted[i].avg)} average ${metricLabel.toLowerCase()}`, `${charted[i].n} posts`],
+  });
+  const body2 = chartHost ? h('div', {}, h('p', { class: 'chart-caption' }, `Average ${metricLabel.toLowerCase()} for each ${colName.toLowerCase()} with at least 3 posts, highest first.`), chartHost, table) : table;
+  return { panel: panel(title, desc, body2, rows.length > pageSize ? pager : null), drawChart };
 }
 
 /** Plain-language verdict on whether posts did consistently better at some hours (see scoreSlots). */

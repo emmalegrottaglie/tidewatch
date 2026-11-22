@@ -268,6 +268,9 @@ details.table-view table th[scope="row"] { text-align: left; white-space: nowrap
 .chart .line { fill: none; stroke: var(--s6); stroke-width: 2; stroke-linejoin: round; }
 .chart .bar { fill: var(--s3); }
 .chart .bar.best { fill: var(--p4); }
+/* Category bars: a light tint with a solid outline, the top category in pink. */
+.chart .bar.soft { fill: color-mix(in srgb, var(--s6) 22%, var(--card)); stroke: var(--s6); stroke-width: 2; stroke-linejoin: round; }
+.chart .bar.soft.best { fill: color-mix(in srgb, var(--accent-strong) 28%, var(--card)); stroke: var(--accent-strong); }
 .chart .crosshair { stroke: var(--ink); stroke-width: 1; }
 .chart .dot { fill: var(--s6); stroke: var(--card); stroke-width: 2; }
 .chart .hit { fill: transparent; }
@@ -419,3 +422,7 @@ details.table-view[open] > .table-scroll { animation: fade var(--motion-150) var
   #mapping-actions:not([hidden]) { animation-duration: var(--motion-100); }
   #count-list .meter i { transition: none; }
 }
+
+/* Category bar charts above the sites and flair tables */
+.chart-caption { color: var(--ink-3); font-size: 0.88rem; margin-bottom: 6px; }
+.group-chart { margin-bottom: 18px; }
