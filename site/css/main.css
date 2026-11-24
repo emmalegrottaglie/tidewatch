@@ -426,3 +426,17 @@ details.table-view[open] > .table-scroll { animation: fade var(--motion-150) var
 /* Category bar charts above the sites and flair tables */
 .chart-caption { color: var(--ink-3); font-size: 0.88rem; margin-bottom: 6px; }
 .group-chart { margin-bottom: 18px; }
+
+/* Today and the current hour. The day label sits in a pink pill (it carries the meaning, not
+   color alone: tooltips say "today" / "now" and the panel footer names the current time); the
+   current hour's cell gets a ring and the hour label is bold. */
+.heatmap .hm-row.today { justify-self: start; background: var(--flag-pink); color: #1e283f; border-radius: 999px; padding: 1px 8px; }
+.heatmap .hm-col.now { color: var(--ink); font-weight: 700; }
+.heatmap .cell.now { box-shadow: inset 0 0 0 2px var(--card), 0 0 0 2px var(--accent-strong); z-index: 1; }
+.chart .label-pill { fill: var(--flag-pink); }
+.chart .axis text.highlight { fill: #1e283f; font-weight: 700; }
+.ranked li.today .when { display: flex; align-items: center; gap: 8px; }
+.today-tag { background: var(--flag-pink); color: #1e283f; border-radius: 999px; padding: 0 8px; font-size: 0.78rem; font-weight: 600; line-height: 1.5; }
+@container heat (max-width: 620px) {
+  .heatmap .hm-row.today { justify-self: center; align-self: center; }
+}

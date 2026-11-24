@@ -1,5 +1,5 @@
 import { SOURCES, SourceError } from './sources.js';
-import { analyze, DAYS, hourLabel as fmtHour, gridToCSV, rankSlots, metricValue, collapseGrid } from './analysis.js';
+import { analyze, DAYS, hourLabel as fmtHour, gridToCSV, rankSlots, metricValue, collapseGrid, dayHour } from './analysis.js';
 import { renderHeatmap, renderArea, renderBars, legend, divergingLegend } from './charts.js';
 import { readFile, rowsToPosts } from './importer.js';
 import { initTheme } from './theme.js';
@@ -344,6 +344,8 @@ function render({ animate = false } = {}) {
   out.append(verdict);
 
   /* heatmap */
+  // Today and the current hour, in the chosen time zone, are marked on every chart.
+  const now = dayHour(Date.now(), state.timeZone);
   const values = bestMode ? r.best.score : perf ? r.grid.score.map((v, i) => (r.grid.counts[i] > 0 ? v : null)) : r.activity.rate;
   const ranked = rankSlots(values, 3);
   const ranks = new Map(ranked.map((s, i) => [s.slot, i + 1]));
@@ -368,7 +370,7 @@ function render({ animate = false } = {}) {
   }
   const fmtCell = (v) => (bestMode ? String(Math.round(v)) : perf ? fmtPct(v) : fmtNum(v));
   const heatPanel = panel(`Best times to post on ${name}`, heatDesc, heatHost,
-    [perf ? divergingLegend() : bestMode ? legend('Weaker', 'Best') : legend(), modeSwitch, h('span', {}, `Time zone: ${state.timeZone}`)]);
+    [perf ? divergingLegend() : bestMode ? legend('Weaker', 'Best') : legend(), modeSwitch, h('span', {}, `Time zone: ${state.timeZone}, now ${DAYS[now.day].slice(0, 3)} ${hourText(now.hour)}`)]);
   heatPanel.querySelector('.panel-head').append(tableView('Weekly grid', ['Day', ...Array.from({ length: 24 }, (_, i) => hourText(i))],
     DAYS.map((d, di) => [d, ...Array.from({ length: 24 }, (_, hr) => { const v = values[di * 24 + hr]; return v === null ? '—' : fmtCell(v); })])));
   out.append(heatPanel);
@@ -377,12 +379,13 @@ function render({ animate = false } = {}) {
     ranks,
     center: perf ? 50 : null,
     dayNames: DAYS,
+    now,
     hourLabel: (hr) => hourText(hr),
     label: `Heatmap of ${bestMode ? 'best times to post' : perf ? 'post performance' : activityLabel} by day and hour`,
     tipLines: (slot) => {
       const d = Math.floor(slot / 24), hr = slot % 24;
       const v = values[slot];
-      const head = `${DAYS[d]} ${hourRange(hr)}${ranks.get(slot) ? ` · #${ranks.get(slot)}` : ''}`;
+      const head = `${DAYS[d]} ${hourRange(hr)}${ranks.get(slot) ? ` · #${ranks.get(slot)}` : ''}${slot === now.day * 24 + now.hour ? ' (now)' : d === now.day ? ' (today)' : ''}`;
       if (v === null) return [head, 'No data for this hour'];
       if (bestMode) {
         const lines = [head, `Best-time score ${Math.round(v)} of 100`];
@@ -432,7 +435,8 @@ function render({ animate = false } = {}) {
     values: dayVals, labels: DAYS.map((d) => d.slice(0, 3)), yFormat: perf ? (v) => `${Math.round(v)}%` : bestMode ? fmtScore : fmtNum, best: bestDay,
     reference: perf ? 50 : null, referenceLabel: 'typical',
     label: `Bar chart of ${bestMode ? 'best-time score' : perf ? 'performance' : activityLabel} by day of week`,
-    tipLines: (i) => [DAYS[i], valueLine(dayVals[i]), perf ? `${r.byDay.counts[i]} posts` : ''].filter(Boolean),
+    highlight: now.day,
+    tipLines: (i) => [i === now.day ? `${DAYS[i]} (today)` : DAYS[i], valueLine(dayVals[i]), perf ? `${r.byDay.counts[i]} posts` : ''].filter(Boolean),
   });
 
   /* recommendations */
@@ -441,8 +445,8 @@ function render({ animate = false } = {}) {
   const order = [1, 2, 3, 4, 5, 6, 0]; // Monday first reads like a planner
   const perDayList = h('ol', { class: 'ranked plain' }, order.map((d) => {
     const p = r.perDay[d];
-    return h('li', {},
-      h('div', {}, h('div', { class: 'when' }, DAYS[d]), h('div', { class: 'sub' }, p ? hourRange(p.hour) : 'No data'),
+    return h('li', { class: d === now.day ? 'today' : null },
+      h('div', {}, h('div', { class: 'when' }, DAYS[d], d === now.day ? h('span', { class: 'today-tag' }, 'Today') : null), h('div', { class: 'sub' }, p ? hourRange(p.hour) : 'No data'),
         p ? h('div', { class: 'meter', 'aria-hidden': 'true' }, h('i', { style: `width:${(p.score / perDayMax) * 100}%` })) : null),
       h('span', { class: 'score' }, p ? scoreText(p.score) : '—'));
   }));

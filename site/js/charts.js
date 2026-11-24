@@ -39,7 +39,7 @@ export function hideTip() { if (tipEl) tipEl.classList.remove('on'); }
 
 function el(name, attrs = {}, parent) {
   const node = document.createElementNS(SVG_NS, name);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) node.setAttribute(k, v);
   if (parent) parent.append(node);
   return node;
 }
@@ -95,7 +95,7 @@ export const divergingLegend = () => buildLegend(['n4', 'n3', 'n2', 'n1', 'mid',
  * Weekly heatmap. values: 168 numbers (null = no data). ranks: Map(slot -> 1..3).
  * tipLines(slot) returns the tooltip text lines.
  */
-export function renderHeatmap(container, { values, ranks = new Map(), tipLines, dayNames, hourLabel, label, center = null }) {
+export function renderHeatmap(container, { values, ranks = new Map(), tipLines, dayNames, hourLabel, label, center = null, now = null }) {
   const steps = center === null ? quantize(values) : divergingSteps(values, center);
   const grid = document.createElement('div');
   grid.className = 'heatmap';
@@ -103,7 +103,7 @@ export function renderHeatmap(container, { values, ranks = new Map(), tipLines, 
   grid.setAttribute('aria-label', label);
   for (let h = 0; h < 24; h++) {
     const c = document.createElement('div');
-    c.className = `hm-col${h % 3 ? ' minor' : ''}`;
+    c.className = `hm-col${h % 3 ? ' minor' : ''}${now?.hour === h ? ' now' : ''}`;
     c.style.setProperty('--h', h);
     c.textContent = hourLabel(h);
     c.setAttribute('aria-hidden', 'true');
@@ -112,7 +112,7 @@ export function renderHeatmap(container, { values, ranks = new Map(), tipLines, 
   const cells = [];
   for (let d = 0; d < 7; d++) {
     const r = document.createElement('div');
-    r.className = 'hm-row';
+    r.className = `hm-row${now?.day === d ? ' today' : ''}`;
     r.style.setProperty('--d', d);
     r.textContent = dayNames[d].slice(0, 3);
     r.setAttribute('aria-hidden', 'true');
@@ -121,7 +121,7 @@ export function renderHeatmap(container, { values, ranks = new Map(), tipLines, 
       const slot = d * 24 + h;
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'cell';
+      b.className = `cell${now?.day === d ? ' today' : ''}${now?.day === d && now.hour === h ? ' now' : ''}`;
       b.style.setProperty('--d', d);
       b.style.setProperty('--h', h);
       if (steps[slot] !== null) b.style.setProperty('--c', typeof steps[slot] === 'number' ? `var(--s${steps[slot]})` : `var(--${steps[slot]})`);
@@ -261,7 +261,7 @@ export function renderArea(container, { values, xLabel, yFormat, tipLines, refer
  * rotateLabels: for long category names (flair, sites), labels are slanted and shortened; the
  * tooltip and the table beside the chart carry the full name. soft: tinted fill with a solid outline.
  */
-export function renderBars(container, { values, labels, yFormat, tipLines, best = -1, reference = null, referenceLabel = '', label, rotateLabels = false, soft = false }) {
+export function renderBars(container, { values, labels, yFormat, tipLines, best = -1, reference = null, referenceLabel = '', label, rotateLabels = false, soft = false, highlight = -1 }) {
   const n = values.length;
   const W = chartWidth(container), H = rotateLabels ? 300 : 240, m = { t: 22, r: 12, b: rotateLabels ? 88 : 28, l: 44 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
@@ -286,7 +286,9 @@ export function renderBars(container, { values, labels, yFormat, tipLines, best 
       const tx = el('text', { x: cx, y: ly, 'text-anchor': 'end', transform: `rotate(-40 ${cx} ${ly})` }, ax);
       tx.textContent = labels[i].length > 14 ? `${labels[i].slice(0, 13).trimEnd()}…` : labels[i];
     } else {
-      const tx = el('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }, ax);
+      // The highlighted category (today, on the day chart) sits in a pink pill under the axis.
+      if (i === highlight) el('rect', { class: 'label-pill', x: cx - 24, y: H - 25, width: 48, height: 22, rx: 11 }, ax);
+      const tx = el('text', { x: cx, y: H - 8, 'text-anchor': 'middle', class: i === highlight ? 'highlight' : null }, ax);
       tx.textContent = labels[i];
     }
     if (v === null) return;
