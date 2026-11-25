@@ -3,13 +3,12 @@ import { analyze, DAYS, hourLabel as fmtHour, gridToCSV, rankSlots, metricValue,
 import { renderHeatmap, renderArea, renderBars, legend, divergingLegend } from './charts.js';
 import { readFile, rowsToPosts } from './importer.js';
 import { initTheme } from './theme.js';
+import { h, timeZones, download, localZone, hour12 } from './ui.js';
 
 initTheme();
 
 const $ = (id) => document.getElementById(id);
 const PLATFORMS = [...Object.values(SOURCES), { id: 'import', label: 'Import a file' }];
-const hour12 = !['h23', 'h24'].includes(new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions().hourCycle);
-const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 const state = {
   platform: 'reddit',
@@ -23,21 +22,6 @@ const state = {
   importTable: null,
 };
 
-/* ---------- tiny DOM helper (text only, never innerHTML with data) ---------- */
-function h(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (v === null || v === undefined || v === false) continue;
-    if (k === 'class') node.className = v;
-    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
-    else if (k === 'style') node.style.cssText = v;
-    // Links come from third-party servers; only let web, relative and blob links through.
-    else if (k === 'href' && !/^(https?:|blob:|[./#]|[\w-]+\.html)/i.test(String(v))) continue;
-    else node.setAttribute(k, v === true ? '' : v);
-  }
-  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c instanceof Node ? c : String(c));
-  return node;
-}
 const hourText = (hr) => fmtHour(hr, { hour12 });
 const hourRange = (hr) => `${fmtHour(hr, { hour12, style: 'range' })} – ${fmtHour((hr + 1) % 24, { hour12, style: 'range' })}`;
 const fmtPct = (v) => `${Math.round(v)}%`;
@@ -227,14 +211,6 @@ function finishImport(posts, kind, name, metrics) {
 }
 
 /* ---------- rendering ---------- */
-function timeZones() {
-  let zones = [];
-  try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = []; }
-  if (!zones.includes(localZone)) zones.unshift(localZone);
-  if (!zones.includes('UTC')) zones.unshift('UTC');
-  return zones;
-}
-
 function panel(title, desc, body, foot) {
   return h('section', { class: 'panel' },
     h('div', { class: 'panel-head' }, h('h3', {}, title), desc ? h('p', {}, desc) : null),
@@ -589,15 +565,6 @@ function fmtCount(v) {
 
 const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'analysis';
-
-function download(name, text, type) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = h('a', { href: url, download: name });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 async function copyLink(button) {
   try {

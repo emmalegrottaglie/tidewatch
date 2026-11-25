@@ -6,7 +6,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "node --test tests/analysis.test.mjs tests/importer.test.mjs tests/tools.test.mjs tests/pipeline.test.mjs",
+    "test": "node --test tests/analysis.test.mjs tests/importer.test.mjs tests/tools.test.mjs tests/pipeline.test.mjs tests/planner.test.mjs",
     "test:live": "node tests/sources.live.mjs",
     "start": "python -m http.server 8765 --directory site"
   },

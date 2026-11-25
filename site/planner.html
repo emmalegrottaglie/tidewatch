@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Posting planner — Tidewatch</title>
+  <meta name="description" content="Pick the subreddits you post to and get a weekly posting schedule at each one's best hours, with quick-post links, a spreadsheet and calendar reminders. Free and open source.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+  <script>try{const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch{}</script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="./">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor"/><path d="M4 20c3 0 3-3 6-3s3 3 6 3 3-3 6-3 3 3 6 3" fill="none" stroke="var(--paper)" stroke-width="2.4" stroke-linecap="round"/><circle cx="22" cy="10" r="3.2" fill="#f9ad26"/></svg>
+        Tidewatch
+      </a>
+      <nav class="site-nav" aria-label="Main">
+        <a href="./">Analyzer</a>
+        <a href="planner.html" aria-current="page">Planner</a>
+        <a href="tools.html">Tools</a>
+        <a href="method.html">How it works</a>
+        <a href="https://github.com/emmalegrottaglie/tidewatch">Source</a>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">Theme</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>Plan a week of posts.</h1>
+      <p class="lede">List the subreddits you post to. Tidewatch reads each one, finds its best hours, and lays out a week where every post lands at a strong time, with a link to post straight away, a spreadsheet and calendar reminders.</p>
+
+      <form class="planner-form" id="plan-form" novalidate>
+        <label for="plan-subs" class="planner-label">Subreddits</label>
+        <textarea id="plan-subs" class="planner-subs" rows="3" placeholder="photography, analog, r/itookapicture" autocomplete="off" spellcheck="false"></textarea>
+        <p class="planner-hint">Separate names with commas, spaces or new lines. Up to 25.</p>
+        <div class="planner-options">
+          <label>Posts per subreddit each week
+            <select id="plan-per" class="input">
+              <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option>
+              <option value="4">4</option><option value="5">5</option><option value="7">7 (daily)</option>
+            </select>
+          </label>
+          <label>Score posts by
+            <select id="plan-metric" class="input">
+              <option value="upvotes" selected>Upvotes</option>
+              <option value="comments">Comments</option>
+              <option value="engagement">Upvotes + comments</option>
+            </select>
+          </label>
+          <label>Time zone <select id="plan-tz" class="input"></select></label>
+          <button class="btn btn-primary" type="submit" id="plan-go">Build my plan</button>
+        </div>
+        <p class="field-error" id="plan-error" hidden></p>
+      </form>
+    </section>
+
+    <section id="plan-progress" class="planner-progress" hidden aria-live="polite"></section>
+    <section id="plan-results" class="planner-results" hidden></section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>Tidewatch is open source under the MIT license. Reddit data comes from the Arctic Shift archive and stays in your browser.</p>
+      <p><a href="method.html">How it works</a>&emsp;<a href="https://github.com/emmalegrottaglie/tidewatch">GitHub</a></p>
+    </div>
+  </footer>
+  <script type="module" src="js/planner.js"></script>
+</body>
+</html>
