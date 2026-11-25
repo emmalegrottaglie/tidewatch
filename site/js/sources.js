@@ -273,10 +273,14 @@ const reddit = {
   normalize: (q) => q.trim().replace(/^https?:\/\/(www\.|old\.)?reddit\.com\//i, '').replace(/^\/?r\//i, '').replace(/\/.*$/, ''),
   validate: (q) => /^[A-Za-z0-9_]{2,21}$/.test(q) || 'Subreddit names are 2-21 letters, numbers or underscores.',
   title: (q) => `r/${q}`,
+  /** The daily snapshot or this browser's saved read, or null; never reads the archive. */
+  async cached(name, { signal } = {}) {
+    return await redditSnapshot(name, signal) ?? await browserCachedRead(`reddit:${name.toLowerCase()}`);
+  },
   async fetch(name, { signal, onProgress, live = false }) {
     const cacheKey = `reddit:${name.toLowerCase()}`;
     if (!live) {
-      const snapshot = await redditSnapshot(name, signal) ?? await browserCachedRead(cacheKey);
+      const snapshot = await this.cached(name, { signal });
       if (snapshot) return snapshot;
     }
     const result = await readSubreddit(name, { signal, onProgress });

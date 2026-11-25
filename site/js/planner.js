@@ -93,10 +93,21 @@ async function readAll() {
   progressHost.hidden = false;
   $('plan-go').disabled = true;
   try {
+    // Saved copies are plain files, so fetch them all at once; only the archive needs one at a time.
+    await Promise.all(state.subs.map(async (name) => {
+      const key = name.toLowerCase();
+      if (state.reads.get(key)?.data) { setRow(name, { fraction: 1, text: 'Ready', state: 'done' }); return; }
+      // A browser can briefly hold an older sources.js without cached() after a deploy; then
+      // every subreddit goes through the one-at-a-time loop below, which still uses saved copies.
+      const data = SOURCES.reddit.cached ? await SOURCES.reddit.cached(name, { signal: controller.signal }) : null;
+      if (!data) return;
+      state.reads.set(key, { name: data.profile.name.replace(/^r\//, ''), data });
+      setRow(name, { fraction: 1, text: 'Ready (saved copy)', state: 'done' });
+    }));
+    render();
     for (const name of state.subs) {
       const key = name.toLowerCase();
-      const done = state.reads.get(key);
-      if (done?.data) { setRow(name, { fraction: 1, text: 'Ready', state: 'done' }); continue; }
+      if (state.reads.get(key)?.data) continue;
       setRow(name, { fraction: 0.02, text: 'Reading…', state: 'busy' });
       try {
         const data = await SOURCES.reddit.fetch(name, {
